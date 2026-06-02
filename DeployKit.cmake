@@ -314,6 +314,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
                 \"\${abs_prefix}/${TARGET_NAME}\"
                 \"\${abs_prefix}/lib/libGraphicsEngine.so\"
             )
+            message(STATUS \"[DeployKit DEBUG] Target binaries to analyze: \${binaries_to_analyze}\")
             set(copied_libs \"\")
             set(new_dependencies_found TRUE)
             
@@ -362,6 +363,8 @@ macro(deploykit_configure_bundling TARGET_NAME)
                         # If this is libpylonbase, copy the pylon Plugins directory recursively to lib/pylon/Plugins
                         if(dep_name MATCHES \"libpylonbase\")
                             get_filename_component(pylon_lib_dir \"\${real_dep}\" DIRECTORY)
+                            message(STATUS \"[DeployKit DEBUG] Found libpylonbase: \${dep} (real: \${real_dep})\")
+                            message(STATUS \"[DeployKit DEBUG] Searching pylon Plugins relative to: \${pylon_lib_dir}\")
                             
                             # Define candidate paths for pylon Plugins on Linux
                             set(pylon_plugin_candidates
@@ -378,13 +381,16 @@ macro(deploykit_configure_bundling TARGET_NAME)
                             set(found_plugins \"\")
                             foreach(cand \${pylon_plugin_candidates})
                                 if(EXISTS \"\${cand}\")
+                                    message(STATUS \"[DeployKit DEBUG] Candidate EXISTS: \${cand}\")
                                     set(found_plugins \"\${cand}\")
                                     break()
+                                else()
+                                    message(STATUS \"[DeployKit DEBUG] Candidate NOT found: \${cand}\")
                                 endif()
                             endforeach()
                             
                             if(found_plugins)
-                                message(STATUS \"[DeployKit] Found pylon Plugins: \${found_plugins}\")
+                                message(STATUS \"[DeployKit] Copying pylon Plugins from: \${found_plugins} to \${abs_prefix}/lib/pylon/Plugins\")
                                 file(INSTALL DESTINATION \"\${abs_prefix}/lib/pylon/Plugins\"
                                     TYPE DIRECTORY
                                     FILES \"\${found_plugins}/\"
