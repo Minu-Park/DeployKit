@@ -12,7 +12,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
 
     # Set default install prefix to build/bundled if not set by user or defaults to /usr/local
     if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT OR CMAKE_INSTALL_PREFIX STREQUAL "/usr/local")
-        set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/../bundled" CACHE PATH "Install path prefix" FORCE)
+        set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/bundled" CACHE PATH "Install path prefix" FORCE)
         message(STATUS "[DeployKit] Setting default CMAKE_INSTALL_PREFIX to: ${CMAKE_INSTALL_PREFIX}")
     endif()
 
