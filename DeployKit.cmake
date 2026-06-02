@@ -270,6 +270,12 @@ macro(deploykit_configure_bundling TARGET_NAME)
         message(STATUS "[DeployKit] Linux RPATH configured to \$ORIGIN/../lib")
     endif()
 
+    # Automatically trigger install/bundling as a post-build step
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}"
+        COMMENT "[DeployKit] Post-build: Automatically bundling and installing to ${CMAKE_INSTALL_PREFIX}..."
+    )
+
     # 4. CPack Configuration
     set(CPACK_PACKAGE_NAME "${TARGET_NAME}")
     set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
