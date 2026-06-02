@@ -5,7 +5,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
     # Parse arguments
     set(options)
     set(oneValueArgs MACOSX_ICON)
-    set(multiValueArgs EXTRA_LIBS EXTRA_FILES)
+    set(multiValueArgs EXTRA_LIBS EXTRA_FILES LIBPATHS)
     cmake_parse_arguments(DEPLOY "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     message(STATUS "[DeployKit] Configuring deployment for target: ${TARGET_NAME}")
@@ -52,16 +52,21 @@ macro(deploykit_configure_bundling TARGET_NAME)
 
         # Execute macdeployqt as a post-install step
         if(MACDEPLOYQT_PATH)
+            set(macdeployqt_libpaths "")
+            foreach(path ${DEPLOY_LIBPATHS})
+                list(APPEND macdeployqt_libpaths "-libpath=${path}")
+            endforeach()
+
             install(CODE "
-                message(STATUS \"[DeployKit] Packaging: Running macdeployqt on \${CMAKE_INSTALL_PREFIX}/${TARGET_NAME}.app...\")
+                message(STATUS \"[DeployKit] Packaging: Running macdeployqt on \${CMAKE_INSTALL_PREFIX}/${TARGET_NAME}.app with libpaths: ${DEPLOY_LIBPATHS}...\")
                 execute_process(
-                    COMMAND \"${MACDEPLOYQT_PATH}\" \"\${CMAKE_INSTALL_PREFIX}/${TARGET_NAME}.app\" -verbose=1
+                    COMMAND \"${MACDEPLOYQT_PATH}\" \"\${CMAKE_INSTALL_PREFIX}/${TARGET_NAME}.app\" ${macdeployqt_libpaths} -verbose=1
                     RESULT_VARIABLE deploy_res
                 )
                 if(NOT deploy_res EQUAL 0)
                     message(FATAL_ERROR \"[DeployKit] macdeployqt failed with exit code: \${deploy_res}\")
                 endif()
-            " COMPONENT Runtime)
+            ")
         endif()
 
     elseif(WIN32)
@@ -110,7 +115,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
                 if(NOT deploy_res EQUAL 0)
                     message(FATAL_ERROR \"[DeployKit] windeployqt failed with exit code: \${deploy_res}\")
                 endif()
-            " COMPONENT Runtime)
+            ")
         endif()
 
     else()
@@ -149,7 +154,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
     set(CPACK_PACKAGE_VENDOR "Minu-Park")
 
     if(APPLE)
-        set(CPACK_GENERATOR "DMG")
+        set(CPACK_GENERATOR "DragNDrop")
         set(CPACK_DMG_VOLUME_NAME "${TARGET_NAME}")
         set(CPACK_SYSTEM_NAME "macOS")
     elseif(WIN32)
