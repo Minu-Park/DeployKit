@@ -250,6 +250,39 @@ macro(deploykit_configure_bundling TARGET_NAME)
             RUNTIME DESTINATION .
         )
 
+        # Copy Qt plugins on Linux if Qt is used (only essential plugins to avoid heavy dependencies like mysql, postgresql, icu, gtk, etc.)
+        set(QT_PLUGINS_TO_COPY platforms xcbglintegrations imageformats egldeviceintegrations)
+        if(Qt6_DIR)
+            get_filename_component(QT_PREFIX_DIR "${Qt6_DIR}/../../.." ABSOLUTE)
+            foreach(plugin_dir ${QT_PLUGINS_TO_COPY})
+                if(EXISTS "${QT_PREFIX_DIR}/plugins/${plugin_dir}")
+                    install(DIRECTORY "${QT_PREFIX_DIR}/plugins/${plugin_dir}"
+                        DESTINATION plugins
+                        USE_SOURCE_PERMISSIONS
+                    )
+                    message(STATUS "[DeployKit] Linux: Copying Qt plugin directory: ${plugin_dir}")
+                endif()
+            endforeach()
+        elseif(Qt5_DIR)
+            get_filename_component(QT_PREFIX_DIR "${QT_PREFIX_DIR}/../../.." ABSOLUTE)
+            foreach(plugin_dir ${QT_PLUGINS_TO_COPY})
+                if(EXISTS "${QT_PREFIX_DIR}/plugins/${plugin_dir}")
+                    install(DIRECTORY "${QT_PREFIX_DIR}/plugins/${plugin_dir}"
+                        DESTINATION plugins
+                        USE_SOURCE_PERMISSIONS
+                    )
+                    message(STATUS "[DeployKit] Linux: Copying Qt plugin directory: ${plugin_dir}")
+                endif()
+            endforeach()
+        endif()
+
+        # Create qt.conf next to the executable to point to local plugins
+        install(CODE "
+            get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
+            file(WRITE \"\${abs_prefix}/qt.conf\" \"[Paths]\\nPlugins = plugins\\nPrefix = .\\n\")
+            message(STATUS \"[DeployKit] Created \${abs_prefix}/qt.conf\")
+        ")
+
         # Install extra libraries to lib/
         foreach(lib ${DEPLOY_EXTRA_LIBS})
             if(TARGET ${lib})
@@ -310,9 +343,12 @@ macro(deploykit_configure_bundling TARGET_NAME)
             get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
             message(STATUS \"[DeployKit] Linux Packaging: Resolving runtime dependencies recursively...\")
             
+            file(GLOB_RECURSE qt_plugin_binaries \"\${abs_prefix}/plugins/*.so\")
+            
             set(binaries_to_analyze 
                 \"\${abs_prefix}/${TARGET_NAME}\"
                 \"\${abs_prefix}/lib/libGraphicsEngine.so\"
+                \${qt_plugin_binaries}
             )
             message(STATUS \"[DeployKit DEBUG] Target binaries to analyze: \${binaries_to_analyze}\")
             set(copied_libs \"\")
@@ -426,9 +462,62 @@ macro(deploykit_configure_bundling TARGET_NAME)
                                     FILES \"\${found_gentl_dir}/\"
                                 )
                             endif()
+
+                            # 3. Copy dynamically loaded pylon libraries (TL, log4cpp, ExternC, etc.)
+                            set(orig_pylon_lib_dir \"\")
+                            if(EXISTS \"/opt/pylon/lib\")
+                                set(orig_pylon_lib_dir \"/opt/pylon/lib\")
+                            elseif(EXISTS \"/opt/pylon/lib64\")
+                                set(orig_pylon_lib_dir \"/opt/pylon/lib64\")
+                            elseif(EXISTS \"\$ENV{PYLON_ROOT}/lib\")
+                                set(orig_pylon_lib_dir \"\$ENV{PYLON_ROOT}/lib\")
+                            elseif(EXISTS \"\$ENV{PYLON_ROOT}/lib64\")
+                                set(orig_pylon_lib_dir \"\$ENV{PYLON_ROOT}/lib64\")
+                            endif()
+
+                            if(orig_pylon_lib_dir)
+                                message(STATUS \"[DeployKit DEBUG] Copying dynamically loaded pylon libraries from: \${orig_pylon_lib_dir}\")
+                                file(GLOB pylon_dyn_libs
+                                    \"\${orig_pylon_lib_dir}/*.so*\"
+                                )
+                                foreach(dyn_lib \${pylon_dyn_libs})
+                                     get_filename_component(dyn_lib_name \"\${dyn_lib}\" NAME)
+                                     
+                                     # Skip unused heavy or C-binding pylon components
+                                     if(dyn_lib_name MATCHES \"PylonDataProcessing\" OR 
+                                        dyn_lib_name MATCHES \"pylonutilitypcl\" OR 
+                                        dyn_lib_name MATCHES \"pylonc\\\\.so\" OR 
+                                        dyn_lib_name MATCHES \"ExternC\")
+                                         continue()
+                                     endif()
+                                     
+                                     get_filename_component(dyn_lib_real \"\${dyn_lib}\" REALPATH)
+                                     message(STATUS \"[DeployKit] Copying pylon dynamic library: \${dyn_lib}\")
+                                    file(INSTALL DESTINATION \"\${abs_prefix}/lib\"
+                                        TYPE SHARED_LIBRARY
+                                        FILES \"\${dyn_lib}\"
+                                    )
+                                    if(NOT \"\${dyn_lib}\" STREQUAL \"\${dyn_lib_real}\")
+                                        file(INSTALL DESTINATION \"\${abs_prefix}/lib\"
+                                            TYPE SHARED_LIBRARY
+                                            FILES \"\${dyn_lib_real}\"
+                                        )
+                                    endif()
+                                    
+                                    # Analyze dependencies of these copied dynamic libraries too
+                                    list(FIND copied_libs \"\${dyn_lib_name}\" idx)
+                                    if(idx EQUAL -1)
+                                        list(APPEND copied_libs \"\${dyn_lib_name}\")
+                                        list(APPEND binaries_to_analyze \"\${abs_prefix}/lib/\${dyn_lib_name}\")
+                                        set(new_dependencies_found TRUE)
+                                    endif()
+                                endforeach()
+                            else()
+                                message(WARNING \"[DeployKit] Could not determine original pylon library directory to copy dynamic components!\")
+                            endif()
                             
-                            if(NOT found_plugins AND NOT found_gentl_dir)
-                                message(WARNING \"[DeployKit] libpylonbase detected, but neither Plugins nor gentlproducer directories found!\")
+                            if(NOT found_plugins AND NOT found_gentl_dir AND NOT pylon_dyn_libs)
+                                message(WARNING \"[DeployKit] libpylonbase detected, but no pylon resources (plugins, gentl, libraries) were found!\")
                             endif()
                         endif()
                         
