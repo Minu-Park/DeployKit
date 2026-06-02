@@ -362,12 +362,35 @@ macro(deploykit_configure_bundling TARGET_NAME)
                         # If this is libpylonbase, copy the pylon Plugins directory recursively to lib/pylon/Plugins
                         if(dep_name MATCHES \"libpylonbase\")
                             get_filename_component(pylon_lib_dir \"\${real_dep}\" DIRECTORY)
-                            if(EXISTS \"\${pylon_lib_dir}/pylon/Plugins\")
-                                message(STATUS \"[DeployKit] Found pylon Plugins relative to pylonbase: \${pylon_lib_dir}/pylon/Plugins\")
+                            
+                            # Define candidate paths for pylon Plugins on Linux
+                            set(pylon_plugin_candidates
+                                \"\${pylon_lib_dir}/pylon/Plugins\"
+                                \"\${pylon_lib_dir}/../pylon/Plugins\"
+                                \"\${pylon_lib_dir}/Plugins\"
+                                \"/opt/pylon/lib/pylon/Plugins\"
+                                \"/opt/pylon/lib64/pylon/Plugins\"
+                                \"/usr/lib/pylon/Plugins\"
+                                \"/usr/lib64/pylon/Plugins\"
+                                \"/usr/lib/x86_64-linux-gnu/pylon/Plugins\"
+                            )
+                            
+                            set(found_plugins \"\")
+                            foreach(cand \${pylon_plugin_candidates})
+                                if(EXISTS \"\${cand}\")
+                                    set(found_plugins \"\${cand}\")
+                                    break()
+                                endif()
+                            endforeach()
+                            
+                            if(found_plugins)
+                                message(STATUS \"[DeployKit] Found pylon Plugins: \${found_plugins}\")
                                 file(INSTALL DESTINATION \"\${abs_prefix}/lib/pylon/Plugins\"
                                     TYPE DIRECTORY
-                                    FILES \"\${pylon_lib_dir}/pylon/Plugins/\"
+                                    FILES \"\${found_plugins}/\"
                                 )
+                            else()
+                                message(WARNING \"[DeployKit] libpylonbase detected, but pylon Plugins directory not found in candidates!\")
                             endif()
                         endif()
                         
