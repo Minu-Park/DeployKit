@@ -358,6 +358,18 @@ macro(deploykit_configure_bundling TARGET_NAME)
                                 FILES \"\${real_dep}\"
                             )
                         endif()
+
+                        # If this is libpylonbase, copy the pylon Plugins directory recursively to lib/pylon/Plugins
+                        if(dep_name MATCHES \"libpylonbase\")
+                            get_filename_component(pylon_lib_dir \"\${real_dep}\" DIRECTORY)
+                            if(EXISTS \"\${pylon_lib_dir}/pylon/Plugins\")
+                                message(STATUS \"[DeployKit] Found pylon Plugins relative to pylonbase: \${pylon_lib_dir}/pylon/Plugins\")
+                                file(INSTALL DESTINATION \"\${abs_prefix}/lib/pylon/Plugins\"
+                                    TYPE DIRECTORY
+                                    FILES \"\${pylon_lib_dir}/pylon/Plugins/\"
+                                )
+                            endif()
+                        endif()
                         
                         list(APPEND copied_libs \"\${dep_name}\")
                         list(APPEND binaries_to_analyze \"\${abs_prefix}/lib/\${dep_name}\")
