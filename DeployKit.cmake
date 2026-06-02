@@ -272,6 +272,19 @@ macro(deploykit_configure_bundling TARGET_NAME)
         )
         message(STATUS "[DeployKit] Linux RPATH configured to \$ORIGIN/lib")
 
+        # Set RPATH for any extra shared library targets to $ORIGIN (libraries are in the same folder as their deps)
+        foreach(lib ${DEPLOY_EXTRA_LIBS})
+            if(TARGET ${lib})
+                get_target_property(lib_type ${lib} TYPE)
+                if(lib_type STREQUAL "SHARED_LIBRARY")
+                    set_target_properties(${lib} PROPERTIES
+                        INSTALL_RPATH "$ORIGIN"
+                    )
+                    message(STATUS "[DeployKit] Linux RPATH configured for shared target ${lib} to \$ORIGIN")
+                endif()
+            endif()
+        endforeach()
+
         # Automatically copy runtime dependencies (like VTK, OpenCV) to lib/ recursively
         install(CODE "
             get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
