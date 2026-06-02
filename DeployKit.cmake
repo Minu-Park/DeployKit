@@ -366,28 +366,29 @@ macro(deploykit_configure_bundling TARGET_NAME)
                             message(STATUS \"[DeployKit DEBUG] Found libpylonbase: \${dep} (real: \${real_dep})\")
                             message(STATUS \"[DeployKit DEBUG] Searching pylon Plugins relative to: \${pylon_lib_dir}\")
                             
-                            # Define candidate paths for pylon Plugins on Linux
-                            set(pylon_plugin_candidates
-                                \"\${pylon_lib_dir}/pylon/Plugins\"
-                                \"\${pylon_lib_dir}/../pylon/Plugins\"
-                                \"\${pylon_lib_dir}/Plugins\"
-                                \"/opt/pylon/lib/pylon/Plugins\"
-                                \"/opt/pylon/lib64/pylon/Plugins\"
-                                \"/usr/lib/pylon/Plugins\"
-                                \"/usr/lib64/pylon/Plugins\"
-                                \"/usr/lib/x86_64-linux-gnu/pylon/Plugins\"
-                            )
+                            # Dynamically scan the Pylon installation directory for any directory named 'Plugins'
+                            get_filename_component(pylon_parent_dir \"\${pylon_lib_dir}\" DIRECTORY)
+                            message(STATUS \"[DeployKit DEBUG] Scanning recursively under: \${pylon_parent_dir} for *Plugins*...\")
+                            
+                            file(GLOB_RECURSE found_dirs LIST_DIRECTORIES true \"\${pylon_parent_dir}/*Plugins*\")
                             
                             set(found_plugins \"\")
-                            foreach(cand \${pylon_plugin_candidates})
-                                if(EXISTS \"\${cand}\")
-                                    message(STATUS \"[DeployKit DEBUG] Candidate EXISTS: \${cand}\")
-                                    set(found_plugins \"\${cand}\")
+                            foreach(dir \${found_dirs})
+                                if(IS_DIRECTORY \"\${dir}\" AND dir MATCHES \"/Plugins$\")
+                                    set(found_plugins \"\${dir}\")
                                     break()
-                                else()
-                                    message(STATUS \"[DeployKit DEBUG] Candidate NOT found: \${cand}\")
                                 endif()
                             endforeach()
+                            
+                            # Fallback to any directory containing Plugins
+                            if(NOT found_plugins)
+                                foreach(dir \${found_dirs})
+                                    if(IS_DIRECTORY \"\${dir}\" AND dir MATCHES \"Plugins\")
+                                        set(found_plugins \"\${dir}\")
+                                        break()
+                                    endif()
+                                endforeach()
+                            endif()
                             
                             if(found_plugins)
                                 message(STATUS \"[DeployKit] Copying pylon Plugins from: \${found_plugins} to \${abs_prefix}/lib/pylon/Plugins\")
@@ -396,7 +397,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
                                     FILES \"\${found_plugins}/\"
                                 )
                             else()
-                                message(WARNING \"[DeployKit] libpylonbase detected, but pylon Plugins directory not found in candidates!\")
+                                message(WARNING \"[DeployKit] libpylonbase detected, but pylon Plugins directory not found in recursive scan!\")
                             endif()
                         endif()
                         
