@@ -360,16 +360,16 @@ macro(deploykit_configure_bundling TARGET_NAME)
                             )
                         endif()
 
-                        # If this is libpylonbase, copy the pylon Plugins directory recursively to lib/pylon/Plugins
+                        # If this is libpylonbase, copy the pylon Plugins and gentlproducer directories recursively
                         if(dep_name MATCHES \"libpylonbase\")
                             get_filename_component(pylon_lib_dir \"\${real_dep}\" DIRECTORY)
                             message(STATUS \"[DeployKit DEBUG] Found libpylonbase: \${dep} (real: \${real_dep})\")
-                            message(STATUS \"[DeployKit DEBUG] Searching pylon Plugins relative to: \${pylon_lib_dir}\")
                             
-                            # Dynamically scan the Pylon installation directory for any directory named 'Plugins'
+                            # Dynamically scan the Pylon installation directory
                             get_filename_component(pylon_parent_dir \"\${pylon_lib_dir}\" DIRECTORY)
-                            message(STATUS \"[DeployKit DEBUG] Scanning recursively under: \${pylon_parent_dir} for *Plugins*...\")
                             
+                            # 1. Scan and copy 'Plugins'
+                            message(STATUS \"[DeployKit DEBUG] Scanning recursively under: \${pylon_parent_dir} for *Plugins*...\")
                             file(GLOB_RECURSE found_dirs LIST_DIRECTORIES true \"\${pylon_parent_dir}/*Plugins*\")
                             
                             set(found_plugins \"\")
@@ -396,8 +396,39 @@ macro(deploykit_configure_bundling TARGET_NAME)
                                     TYPE DIRECTORY
                                     FILES \"\${found_plugins}/\"
                                 )
-                            else()
-                                message(WARNING \"[DeployKit] libpylonbase detected, but pylon Plugins directory not found in recursive scan!\")
+                            endif()
+                            
+                            # 2. Scan and copy 'gentlproducer'
+                            message(STATUS \"[DeployKit DEBUG] Scanning recursively under: \${pylon_parent_dir} for *gentlproducer*...\")
+                            file(GLOB_RECURSE found_gentl LIST_DIRECTORIES true \"\${pylon_parent_dir}/*gentlproducer*\")
+                            
+                            set(found_gentl_dir \"\")
+                            foreach(dir \${found_gentl})
+                                if(IS_DIRECTORY \"\${dir}\" AND dir MATCHES \"/gentlproducer$\")
+                                    set(found_gentl_dir \"\${dir}\")
+                                    break()
+                                endif()
+                            endforeach()
+                            
+                            if(NOT found_gentl_dir)
+                                foreach(dir \${found_gentl})
+                                    if(IS_DIRECTORY \"\${dir}\" AND dir MATCHES \"gentlproducer\")
+                                        set(found_gentl_dir \"\${dir}\")
+                                        break()
+                                    endif()
+                                endforeach()
+                            endif()
+                            
+                            if(found_gentl_dir)
+                                message(STATUS \"[DeployKit] Copying pylon gentlproducer from: \${found_gentl_dir} to \${abs_prefix}/lib/gentlproducer\")
+                                file(INSTALL DESTINATION \"\${abs_prefix}/lib/gentlproducer\"
+                                    TYPE DIRECTORY
+                                    FILES \"\${found_gentl_dir}/\"
+                                )
+                            endif()
+                            
+                            if(NOT found_plugins AND NOT found_gentl_dir)
+                                message(WARNING \"[DeployKit] libpylonbase detected, but neither Plugins nor gentlproducer directories found!\")
                             endif()
                         endif()
                         
