@@ -246,7 +246,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
     else()
         # 3. Linux Deployment (Standard RPATH layout)
         install(TARGETS ${TARGET_NAME}
-            RUNTIME DESTINATION bin
+            RUNTIME DESTINATION .
         )
 
         # Install extra libraries to lib/
@@ -254,7 +254,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
             if(TARGET ${lib})
                 install(TARGETS ${lib}
                     LIBRARY DESTINATION lib
-                    RUNTIME DESTINATION bin
+                    RUNTIME DESTINATION .
                 )
             else()
                 if(EXISTS "${lib}")
@@ -267,9 +267,107 @@ macro(deploykit_configure_bundling TARGET_NAME)
 
         # Set RPATH for the executable to find libraries in lib/
         set_target_properties(${TARGET_NAME} PROPERTIES
-            INSTALL_RPATH "$ORIGIN/../lib"
+            INSTALL_RPATH "$ORIGIN/lib"
         )
-        message(STATUS "[DeployKit] Linux RPATH configured to \$ORIGIN/../lib")
+        message(STATUS "[DeployKit] Linux RPATH configured to \$ORIGIN/lib")
+
+        # Automatically copy runtime dependencies (like VTK, OpenCV) to lib/ recursively
+        install(CODE "
+            get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
+            message(STATUS \"[DeployKit] Linux Packaging: Resolving runtime dependencies recursively...\")
+            
+            set(binaries_to_analyze 
+                \"\${abs_prefix}/${TARGET_NAME}\"
+                \"\${abs_prefix}/lib/libGraphicsEngine.so\"
+            )
+            set(copied_libs \"\")
+            set(new_dependencies_found TRUE)
+            
+            while(new_dependencies_found)
+                set(new_dependencies_found FALSE)
+                
+                file(GET_RUNTIME_DEPENDENCIES
+                    EXECUTABLES \${binaries_to_analyze}
+                    RESOLVED_DEPENDENCIES_VAR resolved_deps
+                    UNRESOLVED_DEPENDENCIES_VAR unresolved_deps
+                    DIRECTORIES ${DEPLOY_LIBPATHS}
+                )
+                
+                foreach(dep \${resolved_deps})
+                    # Skip common Linux system libraries to avoid packaging glibc, graphics drivers, x11, etc.
+                    if(dep MATCHES \"^/lib\" OR dep MATCHES \"^/lib64\" OR dep MATCHES \"^/usr/lib\" OR dep MATCHES \"^/usr/lib64\")
+                        if(dep MATCHES \"ld-linux\" OR dep MATCHES \"libc\\\\.so\" OR dep MATCHES \"libm\\\\.so\" OR dep MATCHES \"libpthread\" OR dep MATCHES \"libdl\\\\.so\" OR dep MATCHES \"libstdc\\\\+\\\\+\" OR dep MATCHES \"libgcc_s\" OR dep MATCHES \"libGL\" OR dep MATCHES \"libX11\" OR dep MATCHES \"libxcb\" OR dep MATCHES \"libasound\" OR dep MATCHES \"fontconfig\" OR dep MATCHES \"freetype\")
+                            continue()
+                        endif()
+                    endif()
+                    
+                    get_filename_component(dep_name \"\${dep}\" NAME)
+                    list(FIND copied_libs \"\${dep_name}\" idx)
+                    if(idx EQUAL -1)
+                        message(STATUS \"[DeployKit] Copying dependency: \${dep}\")
+                        
+                        # Resolve real path in case it is a symlink
+                        get_filename_component(real_dep \"\${dep}\" REALPATH)
+                        
+                        # Copy shared library file to lib directory
+                        file(INSTALL DESTINATION \"\${abs_prefix}/lib\"
+                            TYPE SHARED_LIBRARY
+                            FILES \"\${dep}\"
+                        )
+                        
+                        # If symlink, copy the real file too
+                        if(NOT \"\${dep}\" STREQUAL \"\${real_dep}\")
+                            message(STATUS \"[DeployKit] Copying dependency symlink target: \${real_dep}\")
+                            file(INSTALL DESTINATION \"\${abs_prefix}/lib\"
+                                TYPE SHARED_LIBRARY
+                                FILES \"\${real_dep}\"
+                            )
+                        endif()
+                        
+                        list(APPEND copied_libs \"\${dep_name}\")
+                        list(APPEND binaries_to_analyze \"\${abs_prefix}/lib/\${dep_name}\")
+                        set(new_dependencies_found TRUE)
+                    endif()
+                endforeach()
+                
+                foreach(dep \${unresolved_deps})
+                    # Attempt to resolve from DEPLOY_LIBPATHS
+                    get_filename_component(dep_name \"\${dep}\" NAME)
+                    list(FIND copied_libs \"\${dep_name}\" idx)
+                    if(idx EQUAL -1)
+                        set(found_path \"\")
+                        foreach(path ${DEPLOY_LIBPATHS})
+                            if(EXISTS \"\${path}/\${dep_name}\")
+                                set(found_path \"\${path}/\${dep_name}\")
+                                break()
+                            endif()
+                        endforeach()
+                        
+                        if(found_path)
+                            message(STATUS \"[DeployKit] Copying unresolved dependency (found in search paths): \${found_path}\")
+                            get_filename_component(real_found_path \"\${found_path}\" REALPATH)
+                            
+                            file(INSTALL DESTINATION \"\${abs_prefix}/lib\"
+                                TYPE SHARED_LIBRARY
+                                FILES \"\${found_path}\"
+                            )
+                            if(NOT \"\${found_path}\" STREQUAL \"\${real_found_path}\")
+                                file(INSTALL DESTINATION \"\${abs_prefix}/lib\"
+                                    TYPE SHARED_LIBRARY
+                                    FILES \"\${real_found_path}\"
+                                )
+                            endif()
+                            
+                            list(APPEND copied_libs \"\${dep_name}\")
+                            list(APPEND binaries_to_analyze \"\${abs_prefix}/lib/\${dep_name}\")
+                            set(new_dependencies_found TRUE)
+                        else()
+                            message(WARNING \"[DeployKit] Unresolved dependency not found in search paths: \${dep}\")
+                        endif()
+                    endif()
+                endforeach()
+            endwhile()
+        ")
     endif()
 
     # Automatically trigger install/bundling as a post-build step
