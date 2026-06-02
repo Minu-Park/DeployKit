@@ -50,6 +50,14 @@ macro(deploykit_configure_bundling TARGET_NAME)
             endif()
         endforeach()
 
+        # Copy pylon.framework to the bundle Frameworks directory if it exists
+        if(EXISTS "/Library/Frameworks/pylon.framework")
+            install(DIRECTORY "/Library/Frameworks/pylon.framework"
+                DESTINATION ${TARGET_NAME}.app/Contents/Frameworks
+                USE_SOURCE_PERMISSIONS
+            )
+        endif()
+
         # Execute macdeployqt as a post-install step
         if(MACDEPLOYQT_PATH)
             set(macdeployqt_libpaths "")
@@ -58,14 +66,123 @@ macro(deploykit_configure_bundling TARGET_NAME)
             endforeach()
 
             install(CODE "
-                message(STATUS \"[DeployKit] Packaging: Running macdeployqt on \${CMAKE_INSTALL_PREFIX}/${TARGET_NAME}.app with libpaths: ${DEPLOY_LIBPATHS}...\")
+                get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
+                message(STATUS \"[DeployKit] Packaging: Running macdeployqt on \${abs_prefix}/${TARGET_NAME}.app with libpaths: ${DEPLOY_LIBPATHS}...\")
                 execute_process(
-                    COMMAND \"${MACDEPLOYQT_PATH}\" \"\${CMAKE_INSTALL_PREFIX}/${TARGET_NAME}.app\" ${macdeployqt_libpaths} -verbose=1
+                    COMMAND \"${MACDEPLOYQT_PATH}\" \"\${abs_prefix}/${TARGET_NAME}.app\" ${macdeployqt_libpaths} -verbose=1
                     RESULT_VARIABLE deploy_res
                 )
                 if(NOT deploy_res EQUAL 0)
                     message(FATAL_ERROR \"[DeployKit] macdeployqt failed with exit code: \${deploy_res}\")
                 endif()
+
+                # Get runtime dependencies of target and copy them recursively
+                message(STATUS \"[DeployKit] Packaging: Resolving runtime dependencies recursively...\")
+                set(binaries_to_analyze 
+                    \"\${abs_prefix}/${TARGET_NAME}.app/Contents/MacOS/${TARGET_NAME}\"
+                    \"\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks/libGraphicsEngine.dylib\"
+                )
+                set(copied_libs \"\")
+                set(new_dependencies_found TRUE)
+                
+                while(new_dependencies_found)
+                    set(new_dependencies_found FALSE)
+                    
+                    file(GET_RUNTIME_DEPENDENCIES
+                        EXECUTABLES \${binaries_to_analyze}
+                        RESOLVED_DEPENDENCIES_VAR resolved_deps
+                        UNRESOLVED_DEPENDENCIES_VAR unresolved_deps
+                        DIRECTORIES ${DEPLOY_LIBPATHS}
+                    )
+                    
+                    foreach(dep \${resolved_deps})
+                        # Skip system libraries (under /usr/lib or /System)
+                        if(dep MATCHES \"^/usr/lib\" OR dep MATCHES \"^/System\")
+                            continue()
+                        endif()
+                        # Skip Qt libraries since macdeployqt already handled them
+                        if(dep MATCHES \"Qt.*.framework\")
+                            continue()
+                        endif()
+                        
+                        get_filename_component(dep_name \"\${dep}\" NAME)
+                        list(FIND copied_libs \"\${dep_name}\" idx)
+                        if(idx EQUAL -1)
+                            message(STATUS \"[DeployKit] Copying dependency: \${dep}\")
+                            if(dep MATCHES \"pylon.framework\")
+                                # pylon.framework is copied as a directory, skip individual files
+                                continue()
+                            endif()
+                            
+                            # Resolve real path in case it is a symlink
+                            get_filename_component(real_dep \"\${dep}\" REALPATH)
+                            
+                            # Copy shared library file to Frameworks directory
+                            file(INSTALL DESTINATION \"\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks\"
+                                TYPE SHARED_LIBRARY
+                                FILES \"\${dep}\"
+                            )
+                            
+                            # If symlink, copy the real file too
+                            if(NOT \"\${dep}\" STREQUAL \"\${real_dep}\")
+                                message(STATUS \"[DeployKit] Copying dependency symlink target: \${real_dep}\")
+                                file(INSTALL DESTINATION \"\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks\"
+                                    TYPE SHARED_LIBRARY
+                                    FILES \"\${real_dep}\"
+                                )
+                            endif()
+                            
+                            list(APPEND copied_libs \"\${dep_name}\")
+                            list(APPEND binaries_to_analyze \"\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks/\${dep_name}\")
+                            set(new_dependencies_found TRUE)
+                        endif()
+                    endforeach()
+                    
+                    foreach(dep \${unresolved_deps})
+                        # Extract the filename from rpath reference
+                        string(REGEX REPLACE \"^@rpath/\" \"\" dep_name \"\${dep}\")
+                        
+                        list(FIND copied_libs \"\${dep_name}\" idx)
+                        if(idx EQUAL -1)
+                            # Search for this file name in our DEPLOY_LIBPATHS
+                            set(found_path \"\")
+                            foreach(path ${DEPLOY_LIBPATHS})
+                                if(EXISTS \"\${path}/\${dep_name}\")
+                                    set(found_path \"\${path}/\${dep_name}\")
+                                    break()
+                                endif()
+                            endforeach()
+                            
+                            if(found_path)
+                                message(STATUS \"[DeployKit] Copying unresolved dependency (found in search paths): \${found_path}\")
+                                
+                                # Resolve real path in case it is a symlink
+                                get_filename_component(real_found_path \"\${found_path}\" REALPATH)
+                                
+                                # Copy the file (this copies the symlink)
+                                file(INSTALL DESTINATION \"\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks\"
+                                    TYPE SHARED_LIBRARY
+                                    FILES \"\${found_path}\"
+                                )
+                                
+                                # If symlink, copy the real file too
+                                if(NOT \"\${found_path}\" STREQUAL \"\${real_found_path}\")
+                                    message(STATUS \"[DeployKit] Copying unresolved symlink target: \${real_found_path}\")
+                                    file(INSTALL DESTINATION \"\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks\"
+                                        TYPE SHARED_LIBRARY
+                                        FILES \"\${real_found_path}\"
+                                    )
+                                endif()
+                                
+                                list(APPEND copied_libs \"\${dep_name}\")
+                                list(APPEND binaries_to_analyze \"\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks/\${dep_name}\")
+                                set(new_dependencies_found TRUE)
+                            else()
+                                message(WARNING \"[DeployKit] Unresolved dependency not found in search paths: \${dep}\")
+                            endif()
+                        endif()
+                    endforeach()
+                endwhile()
             ")
         endif()
 
