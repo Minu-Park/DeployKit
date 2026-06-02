@@ -1,22 +1,94 @@
 # DeployKit.cmake
 # Reusable deployment and bundling system for Qt-based cross-platform projects.
 
+function(_deploykit_collect_target_runtime_paths ROOT_TARGET TARGET_NAME OUT_VAR)
+    get_property(already_visited GLOBAL PROPERTY "_DEPLOYKIT_VISITED_${ROOT_TARGET}_${TARGET_NAME}")
+    if(already_visited)
+        set(${OUT_VAR} "" PARENT_SCOPE)
+        return()
+    endif()
+    set_property(GLOBAL PROPERTY "_DEPLOYKIT_VISITED_${ROOT_TARGET}_${TARGET_NAME}" TRUE)
+
+    set(paths "")
+    get_target_property(link_libraries ${TARGET_NAME} LINK_LIBRARIES)
+    get_target_property(interface_libraries ${TARGET_NAME} INTERFACE_LINK_LIBRARIES)
+
+    foreach(link_item IN LISTS link_libraries interface_libraries)
+        if(NOT link_item)
+            continue()
+        endif()
+        if(link_item MATCHES "^\\$<LINK_ONLY:(.*)>$")
+            set(link_item "${CMAKE_MATCH_1}")
+        endif()
+
+        if(TARGET "${link_item}")
+            get_target_property(link_type ${link_item} TYPE)
+            if(link_type STREQUAL "SHARED_LIBRARY" OR
+               link_type STREQUAL "MODULE_LIBRARY" OR
+               link_type STREQUAL "EXECUTABLE")
+                list(APPEND paths "$<TARGET_FILE_DIR:${link_item}>")
+            endif()
+
+            _deploykit_collect_target_runtime_paths("${ROOT_TARGET}" "${link_item}" child_paths)
+            list(APPEND paths ${child_paths})
+        elseif(IS_ABSOLUTE "${link_item}" AND EXISTS "${link_item}")
+            get_filename_component(link_dir "${link_item}" DIRECTORY)
+            list(APPEND paths "${link_dir}")
+        endif()
+    endforeach()
+
+    list(REMOVE_DUPLICATES paths)
+    set(${OUT_VAR} "${paths}" PARENT_SCOPE)
+endfunction()
+
 macro(deploykit_configure_bundling TARGET_NAME)
     # Parse arguments
     set(options)
     set(oneValueArgs MACOSX_ICON)
-    set(multiValueArgs EXTRA_LIBS EXTRA_FILES LIBPATHS)
+    set(multiValueArgs EXTRA_LIBS EXTRA_FILES LIBPATHS ANALYZE_BINARIES)
     cmake_parse_arguments(DEPLOY "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     message(STATUS "[DeployKit] Configuring deployment for target: ${TARGET_NAME}")
 
-    # Set default install prefix to build/bundled if not set by user or defaults to system paths
+    _deploykit_collect_target_runtime_paths(${TARGET_NAME} ${TARGET_NAME} deploykit_auto_libpaths)
+    list(APPEND DEPLOY_LIBPATHS ${deploykit_auto_libpaths})
+    list(REMOVE_DUPLICATES DEPLOY_LIBPATHS)
+
+    # Keep macOS app bundles in the source tree for easy Finder access.
+    # On Linux/Windows, prefer the binary tree so out-of-source or shared-folder
+    # builds do not have to write executable files back into the source mount.
     if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT OR 
        CMAKE_INSTALL_PREFIX STREQUAL "/usr/local" OR 
        CMAKE_INSTALL_PREFIX MATCHES "^[a-zA-Z]:/Program Files")
-        set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/bundled" CACHE PATH "Install path prefix" FORCE)
+        if(APPLE)
+            set(deploykit_default_install_prefix "${CMAKE_SOURCE_DIR}/build/bundled")
+        else()
+            set(deploykit_default_install_prefix "${CMAKE_BINARY_DIR}/bundled")
+        endif()
+        set(CMAKE_INSTALL_PREFIX "${deploykit_default_install_prefix}" CACHE PATH "Install path prefix" FORCE)
         message(STATUS "[DeployKit] Setting default CMAKE_INSTALL_PREFIX to: ${CMAKE_INSTALL_PREFIX}")
     endif()
+
+    get_target_property(deploykit_target_output_name ${TARGET_NAME} OUTPUT_NAME)
+    if(NOT deploykit_target_output_name)
+        set(deploykit_target_output_name "${TARGET_NAME}")
+    endif()
+
+    if(APPLE)
+        set(deploykit_installed_target_path "${CMAKE_INSTALL_PREFIX}/${deploykit_target_output_name}.app")
+    else()
+        set(deploykit_installed_target_path "${CMAKE_INSTALL_PREFIX}/${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
+    endif()
+
+    install(CODE "
+        set(deploykit_existing_target \"${deploykit_installed_target_path}\")
+        if(EXISTS \"\${deploykit_existing_target}\")
+            file(REMOVE_RECURSE \"\${deploykit_existing_target}\")
+            if(EXISTS \"\${deploykit_existing_target}\")
+                message(FATAL_ERROR \"[DeployKit] Existing bundle target is not removable: \${deploykit_existing_target}\")
+            endif()
+        endif()
+    ")
 
     # Set up install destinations depending on platform
     if(APPLE)
@@ -38,6 +110,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
         )
 
         # Copy extra libraries to the bundle Frameworks directory
+        set(deploykit_macos_analyze_binaries "")
         foreach(lib ${DEPLOY_EXTRA_LIBS})
             if(TARGET ${lib})
                 install(TARGETS ${lib}
@@ -45,26 +118,49 @@ macro(deploykit_configure_bundling TARGET_NAME)
                     ARCHIVE DESTINATION ${TARGET_NAME}.app/Contents/Frameworks
                     RUNTIME DESTINATION ${TARGET_NAME}.app/Contents/Frameworks
                 )
+                get_target_property(lib_type ${lib} TYPE)
+                if(lib_type STREQUAL "SHARED_LIBRARY" OR lib_type STREQUAL "MODULE_LIBRARY")
+                    list(APPEND deploykit_macos_analyze_binaries
+                        "\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks/$<TARGET_FILE_NAME:${lib}>"
+                    )
+                endif()
             else()
                 if(EXISTS "${lib}")
                     install(FILES "${lib}"
                         DESTINATION ${TARGET_NAME}.app/Contents/Frameworks
                     )
+                    get_filename_component(lib_name "${lib}" NAME)
+                    list(APPEND deploykit_macos_analyze_binaries
+                        "\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks/${lib_name}"
+                    )
                 else()
-                    # It might be a library name like kApi, GoApi, etc.
-                    # We will copy it from link directories or skip if not found
-                    message(STATUS "[DeployKit] Non-target dependency specified: ${lib}. Ensure it is copied or found by macdeployqt.")
+                    message(WARNING "[DeployKit] EXTRA_LIBS entry does not name a target or existing file: ${lib}")
                 endif()
             endif()
         endforeach()
 
-        # Copy pylon.framework to the bundle Frameworks directory if it exists
-        if(EXISTS "/Library/Frameworks/pylon.framework")
-            install(DIRECTORY "/Library/Frameworks/pylon.framework"
-                DESTINATION ${TARGET_NAME}.app/Contents/Frameworks
-                USE_SOURCE_PERMISSIONS
-            )
-        endif()
+        foreach(file ${DEPLOY_EXTRA_FILES})
+            if(IS_DIRECTORY "${file}")
+                install(DIRECTORY "${file}"
+                    DESTINATION ${TARGET_NAME}.app/Contents/Frameworks
+                    USE_SOURCE_PERMISSIONS
+                )
+            elseif(EXISTS "${file}")
+                install(FILES "${file}"
+                    DESTINATION ${TARGET_NAME}.app/Contents/Frameworks
+                )
+                get_filename_component(file_name "${file}" NAME)
+                list(APPEND deploykit_macos_analyze_binaries
+                    "\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks/${file_name}"
+                )
+            else()
+                message(WARNING "[DeployKit] EXTRA_FILES entry does not exist: ${file}")
+            endif()
+        endforeach()
+
+        foreach(binary ${DEPLOY_ANALYZE_BINARIES})
+            list(APPEND deploykit_macos_analyze_binaries "${binary}")
+        endforeach()
 
         # Execute macdeployqt as a post-install step
         if(MACDEPLOYQT_PATH)
@@ -77,18 +173,29 @@ macro(deploykit_configure_bundling TARGET_NAME)
                 get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
                 message(STATUS \"[DeployKit] Packaging: Running macdeployqt on \${abs_prefix}/${TARGET_NAME}.app with libpaths: ${DEPLOY_LIBPATHS}...\")
                 execute_process(
-                    COMMAND \"${MACDEPLOYQT_PATH}\" \"\${abs_prefix}/${TARGET_NAME}.app\" ${macdeployqt_libpaths} -verbose=1
+                    COMMAND \"${MACDEPLOYQT_PATH}\" \"\${abs_prefix}/${TARGET_NAME}.app\" ${macdeployqt_libpaths} -verbose=1 -no-codesign
                     RESULT_VARIABLE deploy_res
+                    OUTPUT_VARIABLE deploy_out
+                    ERROR_VARIABLE deploy_err
                 )
-                if(NOT deploy_res EQUAL 0)
-                    message(FATAL_ERROR \"[DeployKit] macdeployqt failed with exit code: \${deploy_res}\")
+                if(deploy_out)
+                    message(STATUS \"\${deploy_out}\")
+                endif()
+                if(deploy_err)
+                    message(STATUS \"\${deploy_err}\")
+                endif()
+                if(NOT deploy_res EQUAL 0 OR deploy_out MATCHES \"ERROR:\" OR deploy_err MATCHES \"ERROR:\")
+                    message(FATAL_ERROR \"[DeployKit] macdeployqt failed or reported deployment errors; exit code: \${deploy_res}\")
                 endif()
 
                 # Get runtime dependencies of target and copy them recursively
                 message(STATUS \"[DeployKit] Packaging: Resolving runtime dependencies recursively...\")
+                if(POLICY CMP0207)
+                    cmake_policy(SET CMP0207 NEW)
+                endif()
                 set(binaries_to_analyze 
                     \"\${abs_prefix}/${TARGET_NAME}.app/Contents/MacOS/${TARGET_NAME}\"
-                    \"\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks/libGraphicsEngine.dylib\"
+                    ${deploykit_macos_analyze_binaries}
                 )
                 set(copied_libs \"\")
                 set(new_dependencies_found TRUE)
@@ -118,8 +225,18 @@ macro(deploykit_configure_bundling TARGET_NAME)
                         list(FIND copied_libs \"\${dep_name}\" idx)
                         if(idx EQUAL -1)
                             message(STATUS \"[DeployKit] Copying dependency: \${dep}\")
-                            if(dep MATCHES \"pylon.framework\")
-                                # pylon.framework is copied as a directory, skip individual files
+
+                            if(dep MATCHES \"\\\\.framework/\")
+                                string(REGEX REPLACE \"^(.*\\\\.framework)/.*$\" \"\\\\1\" framework_dir \"\${dep}\")
+                                get_filename_component(framework_name \"\${framework_dir}\" NAME)
+                                if(NOT framework_dir MATCHES \"^\${abs_prefix}/\")
+                                    message(STATUS \"[DeployKit] Copying framework dependency: \${framework_dir}\")
+                                    file(INSTALL DESTINATION \"\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks\"
+                                        TYPE DIRECTORY
+                                        FILES \"\${framework_dir}\"
+                                    )
+                                endif()
+                                list(APPEND copied_libs \"\${framework_name}\")
                                 continue()
                             endif()
                             
@@ -164,6 +281,20 @@ macro(deploykit_configure_bundling TARGET_NAME)
                             
                             if(found_path)
                                 message(STATUS \"[DeployKit] Copying unresolved dependency (found in search paths): \${found_path}\")
+
+                                if(found_path MATCHES \"\\\\.framework/\")
+                                    string(REGEX REPLACE \"^(.*\\\\.framework)/.*$\" \"\\\\1\" framework_dir \"\${found_path}\")
+                                    get_filename_component(framework_name \"\${framework_dir}\" NAME)
+                                    if(NOT framework_dir MATCHES \"^\${abs_prefix}/\")
+                                        message(STATUS \"[DeployKit] Copying framework dependency: \${framework_dir}\")
+                                        file(INSTALL DESTINATION \"\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks\"
+                                            TYPE DIRECTORY
+                                            FILES \"\${framework_dir}\"
+                                        )
+                                    endif()
+                                    list(APPEND copied_libs \"\${framework_name}\")
+                                    continue()
+                                endif()
                                 
                                 # Resolve real path in case it is a symlink
                                 get_filename_component(real_found_path \"\${found_path}\" REALPATH)
@@ -230,6 +361,21 @@ macro(deploykit_configure_bundling TARGET_NAME)
             endif()
         endforeach()
 
+        foreach(file ${DEPLOY_EXTRA_FILES})
+            if(IS_DIRECTORY "${file}")
+                install(DIRECTORY "${file}"
+                    DESTINATION .
+                    USE_SOURCE_PERMISSIONS
+                )
+            elseif(EXISTS "${file}")
+                install(FILES "${file}"
+                    DESTINATION .
+                )
+            else()
+                message(WARNING "[DeployKit] EXTRA_FILES entry does not exist: ${file}")
+            endif()
+        endforeach()
+
         # Execute windeployqt as a post-install step
         if(WINDEPLOYQT_PATH)
             install(CODE "
@@ -250,30 +396,81 @@ macro(deploykit_configure_bundling TARGET_NAME)
             RUNTIME DESTINATION .
         )
 
-        # Copy Qt plugins on Linux if Qt is used (only essential plugins to avoid heavy dependencies like mysql, postgresql, icu, gtk, etc.)
-        set(QT_PLUGINS_TO_COPY platforms xcbglintegrations imageformats egldeviceintegrations)
-        if(Qt6_DIR)
-            get_filename_component(QT_PREFIX_DIR "${Qt6_DIR}/../../.." ABSOLUTE)
+        # Copy Qt runtime plugins. Debian-style Qt installs keep plugins under
+        # <arch-libdir>/qt6/plugins, so prefer qmake's canonical query result.
+        set(QT_PLUGINS_TO_COPY
+            platforms
+            xcbglintegrations
+            imageformats
+            iconengines
+            platformthemes
+            egldeviceintegrations
+            wayland-shell-integration
+        )
+        set(deploykit_qt_plugin_root "")
+        set(deploykit_qmake_target "")
+        if(TARGET Qt6::qmake)
+            set(deploykit_qmake_target Qt6::qmake)
+        elseif(TARGET Qt5::qmake)
+            set(deploykit_qmake_target Qt5::qmake)
+        endif()
+
+        if(deploykit_qmake_target)
+            get_target_property(deploykit_qmake_executable ${deploykit_qmake_target} IMPORTED_LOCATION)
+            if(deploykit_qmake_executable)
+                execute_process(
+                    COMMAND "${deploykit_qmake_executable}" -query QT_INSTALL_PLUGINS
+                    OUTPUT_VARIABLE deploykit_qmake_plugin_root
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    RESULT_VARIABLE deploykit_qmake_result
+                )
+                if(deploykit_qmake_result EQUAL 0 AND EXISTS "${deploykit_qmake_plugin_root}")
+                    set(deploykit_qt_plugin_root "${deploykit_qmake_plugin_root}")
+                endif()
+            endif()
+        endif()
+
+        if(NOT deploykit_qt_plugin_root)
+            set(deploykit_qt_plugin_candidates "")
+            if(Qt6_DIR)
+                list(APPEND deploykit_qt_plugin_candidates
+                    "${Qt6_DIR}/../../../../plugins"
+                    "${Qt6_DIR}/../../../plugins"
+                    "${Qt6_DIR}/../../../qt6/plugins"
+                    "${Qt6_DIR}/../../../../lib/qt6/plugins"
+                )
+            endif()
+            if(Qt5_DIR)
+                list(APPEND deploykit_qt_plugin_candidates
+                    "${Qt5_DIR}/../../../../plugins"
+                    "${Qt5_DIR}/../../../plugins"
+                    "${Qt5_DIR}/../../../qt5/plugins"
+                    "${Qt5_DIR}/../../../../lib/qt5/plugins"
+                )
+            endif()
+
+            foreach(candidate ${deploykit_qt_plugin_candidates})
+                get_filename_component(candidate_abs "${candidate}" ABSOLUTE)
+                if(EXISTS "${candidate_abs}/platforms")
+                    set(deploykit_qt_plugin_root "${candidate_abs}")
+                    break()
+                endif()
+            endforeach()
+        endif()
+
+        if(deploykit_qt_plugin_root)
+            message(STATUS "[DeployKit] Linux: Qt plugin root: ${deploykit_qt_plugin_root}")
             foreach(plugin_dir ${QT_PLUGINS_TO_COPY})
-                if(EXISTS "${QT_PREFIX_DIR}/plugins/${plugin_dir}")
-                    install(DIRECTORY "${QT_PREFIX_DIR}/plugins/${plugin_dir}"
+                if(EXISTS "${deploykit_qt_plugin_root}/${plugin_dir}")
+                    install(DIRECTORY "${deploykit_qt_plugin_root}/${plugin_dir}"
                         DESTINATION plugins
                         USE_SOURCE_PERMISSIONS
                     )
                     message(STATUS "[DeployKit] Linux: Copying Qt plugin directory: ${plugin_dir}")
                 endif()
             endforeach()
-        elseif(Qt5_DIR)
-            get_filename_component(QT_PREFIX_DIR "${QT_PREFIX_DIR}/../../.." ABSOLUTE)
-            foreach(plugin_dir ${QT_PLUGINS_TO_COPY})
-                if(EXISTS "${QT_PREFIX_DIR}/plugins/${plugin_dir}")
-                    install(DIRECTORY "${QT_PREFIX_DIR}/plugins/${plugin_dir}"
-                        DESTINATION plugins
-                        USE_SOURCE_PERMISSIONS
-                    )
-                    message(STATUS "[DeployKit] Linux: Copying Qt plugin directory: ${plugin_dir}")
-                endif()
-            endforeach()
+        elseif(TARGET Qt6::Core OR TARGET Qt5::Core)
+            message(FATAL_ERROR "[DeployKit] Linux: Qt plugin root not found; bundled Qt applications need the platforms plugin directory.")
         endif()
 
         # Create qt.conf next to the executable to point to local plugins
@@ -284,40 +481,60 @@ macro(deploykit_configure_bundling TARGET_NAME)
         ")
 
         # Install extra libraries to lib/
+        set(deploykit_linux_analyze_binaries "")
         foreach(lib ${DEPLOY_EXTRA_LIBS})
             if(TARGET ${lib})
                 install(TARGETS ${lib}
                     LIBRARY DESTINATION lib
                     RUNTIME DESTINATION .
                 )
+                get_target_property(lib_type ${lib} TYPE)
+                if(lib_type STREQUAL "SHARED_LIBRARY" OR lib_type STREQUAL "MODULE_LIBRARY")
+                    list(APPEND deploykit_linux_analyze_binaries
+                        "\${abs_prefix}/lib/$<TARGET_FILE_NAME:${lib}>"
+                    )
+                elseif(lib_type STREQUAL "EXECUTABLE")
+                    list(APPEND deploykit_linux_analyze_binaries
+                        "\${abs_prefix}/$<TARGET_FILE_NAME:${lib}>"
+                    )
+                endif()
             else()
                 if(EXISTS "${lib}")
                     install(FILES "${lib}"
                         DESTINATION lib
                     )
+                    get_filename_component(lib_name "${lib}" NAME)
+                    list(APPEND deploykit_linux_analyze_binaries
+                        "\${abs_prefix}/lib/${lib_name}"
+                    )
+                else()
+                    message(WARNING "[DeployKit] EXTRA_LIBS entry does not name a target or existing file: ${lib}")
                 endif()
             endif()
         endforeach()
 
-        # Copy pylon plugins on Linux if they exist
-        set(PYLON_PLUGINS_SRC "")
-        if(EXISTS "/opt/pylon/lib/pylon/Plugins")
-            set(PYLON_PLUGINS_SRC "/opt/pylon/lib/pylon/Plugins/")
-        elseif(EXISTS "/opt/pylon/lib64/pylon/Plugins")
-            set(PYLON_PLUGINS_SRC "/opt/pylon/lib64/pylon/Plugins/")
-        elseif(EXISTS "$ENV{PYLON_ROOT}/lib/pylon/Plugins")
-            set(PYLON_PLUGINS_SRC "$ENV{PYLON_ROOT}/lib/pylon/Plugins/")
-        elseif(EXISTS "$ENV{PYLON_ROOT}/lib64/pylon/Plugins")
-            set(PYLON_PLUGINS_SRC "$ENV{PYLON_ROOT}/lib64/pylon/Plugins/")
-        endif()
+        foreach(file ${DEPLOY_EXTRA_FILES})
+            if(IS_DIRECTORY "${file}")
+                install(DIRECTORY "${file}"
+                    DESTINATION lib
+                    USE_SOURCE_PERMISSIONS
+                )
+            elseif(EXISTS "${file}")
+                install(FILES "${file}"
+                    DESTINATION lib
+                )
+                get_filename_component(file_name "${file}" NAME)
+                list(APPEND deploykit_linux_analyze_binaries
+                    "\${abs_prefix}/lib/${file_name}"
+                )
+            else()
+                message(WARNING "[DeployKit] EXTRA_FILES entry does not exist: ${file}")
+            endif()
+        endforeach()
 
-        if(PYLON_PLUGINS_SRC)
-            install(DIRECTORY "${PYLON_PLUGINS_SRC}"
-                DESTINATION lib/pylon/Plugins
-                USE_SOURCE_PERMISSIONS
-            )
-            message(STATUS "[DeployKit] Linux: Copying pylon plugins from ${PYLON_PLUGINS_SRC} to lib/pylon/Plugins")
-        endif()
+        foreach(binary ${DEPLOY_ANALYZE_BINARIES})
+            list(APPEND deploykit_linux_analyze_binaries "${binary}")
+        endforeach()
 
         # Set RPATH for the executable to find libraries in lib/
         set_target_properties(${TARGET_NAME} PROPERTIES
@@ -342,15 +559,18 @@ macro(deploykit_configure_bundling TARGET_NAME)
         install(CODE "
             get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
             message(STATUS \"[DeployKit] Linux Packaging: Resolving runtime dependencies recursively...\")
+            if(POLICY CMP0207)
+                cmake_policy(SET CMP0207 NEW)
+            endif()
             
             file(GLOB_RECURSE qt_plugin_binaries \"\${abs_prefix}/plugins/*.so\")
             
             set(binaries_to_analyze 
                 \"\${abs_prefix}/${TARGET_NAME}\"
-                \"\${abs_prefix}/lib/libGraphicsEngine.so\"
+                ${deploykit_linux_analyze_binaries}
                 \${qt_plugin_binaries}
             )
-            message(STATUS \"[DeployKit DEBUG] Target binaries to analyze: \${binaries_to_analyze}\")
+            message(STATUS \"[DeployKit] Target binaries to analyze: \${binaries_to_analyze}\")
             set(copied_libs \"\")
             set(new_dependencies_found TRUE)
             
@@ -396,131 +616,6 @@ macro(deploykit_configure_bundling TARGET_NAME)
                             )
                         endif()
 
-                        # If this is libpylonbase, copy the pylon Plugins and gentlproducer directories recursively
-                        if(dep_name MATCHES \"libpylonbase\")
-                            get_filename_component(pylon_lib_dir \"\${real_dep}\" DIRECTORY)
-                            message(STATUS \"[DeployKit DEBUG] Found libpylonbase: \${dep} (real: \${real_dep})\")
-                            
-                            # Dynamically scan the Pylon installation directory
-                            get_filename_component(pylon_parent_dir \"\${pylon_lib_dir}\" DIRECTORY)
-                            
-                            # 1. Scan and copy 'Plugins'
-                            message(STATUS \"[DeployKit DEBUG] Scanning recursively under: \${pylon_parent_dir} for *Plugins*...\")
-                            file(GLOB_RECURSE found_dirs LIST_DIRECTORIES true \"\${pylon_parent_dir}/*Plugins*\")
-                            
-                            set(found_plugins \"\")
-                            foreach(dir \${found_dirs})
-                                if(IS_DIRECTORY \"\${dir}\" AND dir MATCHES \"/Plugins$\")
-                                    set(found_plugins \"\${dir}\")
-                                    break()
-                                endif()
-                            endforeach()
-                            
-                            # Fallback to any directory containing Plugins
-                            if(NOT found_plugins)
-                                foreach(dir \${found_dirs})
-                                    if(IS_DIRECTORY \"\${dir}\" AND dir MATCHES \"Plugins\")
-                                        set(found_plugins \"\${dir}\")
-                                        break()
-                                    endif()
-                                endforeach()
-                            endif()
-                            
-                            if(found_plugins)
-                                message(STATUS \"[DeployKit] Copying pylon Plugins from: \${found_plugins} to \${abs_prefix}/lib/pylon/Plugins\")
-                                file(INSTALL DESTINATION \"\${abs_prefix}/lib/pylon/Plugins\"
-                                    TYPE DIRECTORY
-                                    FILES \"\${found_plugins}/\"
-                                )
-                            endif()
-                            
-                            # 2. Scan and copy 'gentlproducer'
-                            message(STATUS \"[DeployKit DEBUG] Scanning recursively under: \${pylon_parent_dir} for *gentlproducer*...\")
-                            file(GLOB_RECURSE found_gentl LIST_DIRECTORIES true \"\${pylon_parent_dir}/*gentlproducer*\")
-                            
-                            set(found_gentl_dir \"\")
-                            foreach(dir \${found_gentl})
-                                if(IS_DIRECTORY \"\${dir}\" AND dir MATCHES \"/gentlproducer$\")
-                                    set(found_gentl_dir \"\${dir}\")
-                                    break()
-                                endif()
-                            endforeach()
-                            
-                            if(NOT found_gentl_dir)
-                                foreach(dir \${found_gentl})
-                                    if(IS_DIRECTORY \"\${dir}\" AND dir MATCHES \"gentlproducer\")
-                                        set(found_gentl_dir \"\${dir}\")
-                                        break()
-                                    endif()
-                                endforeach()
-                            endif()
-                            
-                            if(found_gentl_dir)
-                                message(STATUS \"[DeployKit] Copying pylon gentlproducer from: \${found_gentl_dir} to \${abs_prefix}/lib/gentlproducer\")
-                                file(INSTALL DESTINATION \"\${abs_prefix}/lib/gentlproducer\"
-                                    TYPE DIRECTORY
-                                    FILES \"\${found_gentl_dir}/\"
-                                )
-                            endif()
-
-                            # 3. Copy dynamically loaded pylon libraries (TL, log4cpp, ExternC, etc.)
-                            set(orig_pylon_lib_dir \"\")
-                            if(EXISTS \"/opt/pylon/lib\")
-                                set(orig_pylon_lib_dir \"/opt/pylon/lib\")
-                            elseif(EXISTS \"/opt/pylon/lib64\")
-                                set(orig_pylon_lib_dir \"/opt/pylon/lib64\")
-                            elseif(EXISTS \"\$ENV{PYLON_ROOT}/lib\")
-                                set(orig_pylon_lib_dir \"\$ENV{PYLON_ROOT}/lib\")
-                            elseif(EXISTS \"\$ENV{PYLON_ROOT}/lib64\")
-                                set(orig_pylon_lib_dir \"\$ENV{PYLON_ROOT}/lib64\")
-                            endif()
-
-                            if(orig_pylon_lib_dir)
-                                message(STATUS \"[DeployKit DEBUG] Copying dynamically loaded pylon libraries from: \${orig_pylon_lib_dir}\")
-                                file(GLOB pylon_dyn_libs
-                                    \"\${orig_pylon_lib_dir}/*.so*\"
-                                )
-                                foreach(dyn_lib \${pylon_dyn_libs})
-                                     get_filename_component(dyn_lib_name \"\${dyn_lib}\" NAME)
-                                     
-                                     # Skip unused heavy or C-binding pylon components
-                                     if(dyn_lib_name MATCHES \"PylonDataProcessing\" OR 
-                                        dyn_lib_name MATCHES \"pylonutilitypcl\" OR 
-                                        dyn_lib_name MATCHES \"pylonc\\\\.so\" OR 
-                                        dyn_lib_name MATCHES \"ExternC\")
-                                         continue()
-                                     endif()
-                                     
-                                     get_filename_component(dyn_lib_real \"\${dyn_lib}\" REALPATH)
-                                     message(STATUS \"[DeployKit] Copying pylon dynamic library: \${dyn_lib}\")
-                                    file(INSTALL DESTINATION \"\${abs_prefix}/lib\"
-                                        TYPE SHARED_LIBRARY
-                                        FILES \"\${dyn_lib}\"
-                                    )
-                                    if(NOT \"\${dyn_lib}\" STREQUAL \"\${dyn_lib_real}\")
-                                        file(INSTALL DESTINATION \"\${abs_prefix}/lib\"
-                                            TYPE SHARED_LIBRARY
-                                            FILES \"\${dyn_lib_real}\"
-                                        )
-                                    endif()
-                                    
-                                    # Analyze dependencies of these copied dynamic libraries too
-                                    list(FIND copied_libs \"\${dyn_lib_name}\" idx)
-                                    if(idx EQUAL -1)
-                                        list(APPEND copied_libs \"\${dyn_lib_name}\")
-                                        list(APPEND binaries_to_analyze \"\${abs_prefix}/lib/\${dyn_lib_name}\")
-                                        set(new_dependencies_found TRUE)
-                                    endif()
-                                endforeach()
-                            else()
-                                message(WARNING \"[DeployKit] Could not determine original pylon library directory to copy dynamic components!\")
-                            endif()
-                            
-                            if(NOT found_plugins AND NOT found_gentl_dir AND NOT pylon_dyn_libs)
-                                message(WARNING \"[DeployKit] libpylonbase detected, but no pylon resources (plugins, gentl, libraries) were found!\")
-                            endif()
-                        endif()
-                        
                         list(APPEND copied_libs \"\${dep_name}\")
                         list(APPEND binaries_to_analyze \"\${abs_prefix}/lib/\${dep_name}\")
                         set(new_dependencies_found TRUE)
@@ -567,10 +662,16 @@ macro(deploykit_configure_bundling TARGET_NAME)
         ")
     endif()
 
-    # Automatically trigger install/bundling as a custom target that always runs on build
-    add_custom_target(Bundle${TARGET_NAME} ALL
+    # Building the target should also refresh the bundle output.
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}"
-        COMMENT "[DeployKit] Automatically bundling and installing to ${CMAKE_INSTALL_PREFIX}..."
+        COMMENT "[DeployKit] Bundling and installing ${TARGET_NAME} to ${CMAKE_INSTALL_PREFIX}..."
+    )
+
+    # Keep an explicit bundle target for manual re-bundling.
+    add_custom_target(Bundle${TARGET_NAME}
+        COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}"
+        COMMENT "[DeployKit] Re-bundling and installing ${TARGET_NAME} to ${CMAKE_INSTALL_PREFIX}..."
     )
     add_dependencies(Bundle${TARGET_NAME} ${TARGET_NAME})
 

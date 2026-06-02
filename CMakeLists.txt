@@ -1,8 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
-project(DeployKit LANGUAGES CXX)
+project(DeployKit LANGUAGES NONE)
 
-# DeployKit.cmake를 모듈 경로에 추가하여 부모 프로젝트가 include(DeployKit)할 수 있도록 함
+# Allow parent projects to include DeployKit by module name after add_subdirectory().
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}")
+if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH}" PARENT_SCOPE)
+endif()
 
-# 부모 빌드 시스템에 정보 전달
+# Report the resolved module path during parent configuration.
 message(STATUS "[DeployKit] Submodule loaded from ${CMAKE_CURRENT_SOURCE_DIR}")
