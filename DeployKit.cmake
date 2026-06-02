@@ -266,6 +266,26 @@ macro(deploykit_configure_bundling TARGET_NAME)
             endif()
         endforeach()
 
+        # Copy pylon plugins on Linux if they exist
+        set(PYLON_PLUGINS_SRC "")
+        if(EXISTS "/opt/pylon/lib/pylon/Plugins")
+            set(PYLON_PLUGINS_SRC "/opt/pylon/lib/pylon/Plugins/")
+        elseif(EXISTS "/opt/pylon/lib64/pylon/Plugins")
+            set(PYLON_PLUGINS_SRC "/opt/pylon/lib64/pylon/Plugins/")
+        elseif(EXISTS "$ENV{PYLON_ROOT}/lib/pylon/Plugins")
+            set(PYLON_PLUGINS_SRC "$ENV{PYLON_ROOT}/lib/pylon/Plugins/")
+        elseif(EXISTS "$ENV{PYLON_ROOT}/lib64/pylon/Plugins")
+            set(PYLON_PLUGINS_SRC "$ENV{PYLON_ROOT}/lib64/pylon/Plugins/")
+        endif()
+
+        if(PYLON_PLUGINS_SRC)
+            install(DIRECTORY "${PYLON_PLUGINS_SRC}"
+                DESTINATION lib/pylon/Plugins
+                USE_SOURCE_PERMISSIONS
+            )
+            message(STATUS "[DeployKit] Linux: Copying pylon plugins from ${PYLON_PLUGINS_SRC} to lib/pylon/Plugins")
+        endif()
+
         # Set RPATH for the executable to find libraries in lib/
         set_target_properties(${TARGET_NAME} PROPERTIES
             INSTALL_RPATH "$ORIGIN/lib"
