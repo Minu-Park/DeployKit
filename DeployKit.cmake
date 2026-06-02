@@ -405,11 +405,12 @@ macro(deploykit_configure_bundling TARGET_NAME)
         ")
     endif()
 
-    # Automatically trigger install/bundling as a post-build step
-    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+    # Automatically trigger install/bundling as a custom target that always runs on build
+    add_custom_target(Bundle${TARGET_NAME} ALL
         COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}"
-        COMMENT "[DeployKit] Post-build: Automatically bundling and installing to ${CMAKE_INSTALL_PREFIX}..."
+        COMMENT "[DeployKit] Automatically bundling and installing to ${CMAKE_INSTALL_PREFIX}..."
     )
+    add_dependencies(Bundle${TARGET_NAME} ${TARGET_NAME})
 
     # 4. CPack Configuration
     set(CPACK_PACKAGE_NAME "${TARGET_NAME}")
