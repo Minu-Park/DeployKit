@@ -392,6 +392,12 @@ macro(deploykit_configure_bundling TARGET_NAME)
 
     else()
         # 3. Linux Deployment (Standard RPATH layout)
+        find_program(DEPLOYKIT_PATCHELF_EXECUTABLE patchelf)
+        if(NOT DEPLOYKIT_PATCHELF_EXECUTABLE)
+            message(FATAL_ERROR "[DeployKit] Linux bundling requires patchelf to rewrite bundled ELF RPATH/RUNPATH entries.")
+        endif()
+        message(STATUS "[DeployKit] Linux: patchelf executable: ${DEPLOYKIT_PATCHELF_EXECUTABLE}")
+
         install(TARGETS ${TARGET_NAME}
             RUNTIME DESTINATION .
         )
@@ -659,6 +665,41 @@ macro(deploykit_configure_bundling TARGET_NAME)
                     endif()
                 endforeach()
             endwhile()
+
+            function(deploykit_set_linux_rpath binary rpath)
+                if(NOT EXISTS \"\${binary}\")
+                    message(WARNING \"[DeployKit] RPATH target does not exist: \${binary}\")
+                    return()
+                endif()
+
+                execute_process(
+                    COMMAND \"${DEPLOYKIT_PATCHELF_EXECUTABLE}\" --set-rpath \"\${rpath}\" \"\${binary}\"
+                    RESULT_VARIABLE deploykit_patchelf_result
+                    ERROR_VARIABLE deploykit_patchelf_error
+                    OUTPUT_QUIET
+                    ERROR_STRIP_TRAILING_WHITESPACE
+                )
+                if(NOT deploykit_patchelf_result EQUAL 0)
+                    message(FATAL_ERROR \"[DeployKit] patchelf failed for \${binary}: \${deploykit_patchelf_error}\")
+                endif()
+                message(STATUS \"[DeployKit] RPATH set: \${binary} -> \${rpath}\")
+            endfunction()
+
+            deploykit_set_linux_rpath(\"\${abs_prefix}/${TARGET_NAME}\" \"$ORIGIN/lib\")
+
+            file(GLOB_RECURSE bundled_libs
+                \"\${abs_prefix}/lib/*.so\"
+                \"\${abs_prefix}/lib/*.so.*\"
+            )
+            list(REMOVE_DUPLICATES bundled_libs)
+            foreach(bundled_lib IN LISTS bundled_libs)
+                deploykit_set_linux_rpath(\"\${bundled_lib}\" \"$ORIGIN\")
+            endforeach()
+
+            file(GLOB_RECURSE bundled_qt_plugins \"\${abs_prefix}/plugins/*.so\")
+            foreach(plugin_binary IN LISTS bundled_qt_plugins)
+                deploykit_set_linux_rpath(\"\${plugin_binary}\" \"$ORIGIN/../../lib:$ORIGIN\")
+            endforeach()
         ")
     endif()
 
