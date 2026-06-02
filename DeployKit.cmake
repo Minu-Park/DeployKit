@@ -100,6 +100,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
                         EXECUTABLES \${binaries_to_analyze}
                         RESOLVED_DEPENDENCIES_VAR resolved_deps
                         UNRESOLVED_DEPENDENCIES_VAR unresolved_deps
+                        CONFLICTING_DEPENDENCIES_PREFIX conflicting_deps
                         DIRECTORIES ${DEPLOY_LIBPATHS}
                     )
                     
@@ -290,6 +291,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
                     EXECUTABLES \${binaries_to_analyze}
                     RESOLVED_DEPENDENCIES_VAR resolved_deps
                     UNRESOLVED_DEPENDENCIES_VAR unresolved_deps
+                    CONFLICTING_DEPENDENCIES_PREFIX conflicting_deps
                     DIRECTORIES ${DEPLOY_LIBPATHS}
                 )
                 
