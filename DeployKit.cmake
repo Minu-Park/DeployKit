@@ -73,19 +73,26 @@ macro(deploykit_configure_bundling TARGET_NAME)
     if(NOT deploykit_target_output_name)
         set(deploykit_target_output_name "${TARGET_NAME}")
     endif()
+    set(deploykit_bundle_destination "$<CONFIG>")
 
     if(APPLE)
-        set(deploykit_installed_target_path "${CMAKE_INSTALL_PREFIX}/${deploykit_target_output_name}.app")
+        set(deploykit_installed_target_path "${CMAKE_INSTALL_PREFIX}/${deploykit_bundle_destination}/${deploykit_target_output_name}.app")
     else()
-        set(deploykit_installed_target_path "${CMAKE_INSTALL_PREFIX}/${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
+        set(deploykit_installed_target_path "${CMAKE_INSTALL_PREFIX}/${deploykit_bundle_destination}/${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
     endif()
 
     install(CODE "
-        set(deploykit_existing_target \"${deploykit_installed_target_path}\")
-        if(EXISTS \"\${deploykit_existing_target}\")
-            file(REMOVE_RECURSE \"\${deploykit_existing_target}\")
-            if(EXISTS \"\${deploykit_existing_target}\")
-                message(FATAL_ERROR \"[DeployKit] Existing bundle target is not removable: \${deploykit_existing_target}\")
+        get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
+        set(deploykit_config_name \"\${CMAKE_INSTALL_CONFIG_NAME}\")
+        if(deploykit_config_name STREQUAL \"\")
+            set(deploykit_bundle_prefix \"\${abs_prefix}\")
+        else()
+            set(deploykit_bundle_prefix \"\${abs_prefix}/\${deploykit_config_name}\")
+        endif()
+        if(EXISTS \"\${deploykit_bundle_prefix}\")
+            file(REMOVE_RECURSE \"\${deploykit_bundle_prefix}\")
+            if(EXISTS \"\${deploykit_bundle_prefix}\")
+                message(FATAL_ERROR \"[DeployKit] Existing bundle directory is not removable: \${deploykit_bundle_prefix}\")
             endif()
         endif()
     ")
@@ -105,8 +112,8 @@ macro(deploykit_configure_bundling TARGET_NAME)
 
         # Set bundle destination to root of the install directory
         install(TARGETS ${TARGET_NAME}
-            BUNDLE DESTINATION .
-            RUNTIME DESTINATION bin
+            BUNDLE DESTINATION ${deploykit_bundle_destination}
+            RUNTIME DESTINATION ${deploykit_bundle_destination}/bin
         )
 
         # Copy extra libraries to the bundle Frameworks directory
@@ -114,24 +121,24 @@ macro(deploykit_configure_bundling TARGET_NAME)
         foreach(lib ${DEPLOY_EXTRA_LIBS})
             if(TARGET ${lib})
                 install(TARGETS ${lib}
-                    LIBRARY DESTINATION ${TARGET_NAME}.app/Contents/Frameworks
-                    ARCHIVE DESTINATION ${TARGET_NAME}.app/Contents/Frameworks
-                    RUNTIME DESTINATION ${TARGET_NAME}.app/Contents/Frameworks
+                    LIBRARY DESTINATION ${deploykit_bundle_destination}/${TARGET_NAME}.app/Contents/Frameworks
+                    ARCHIVE DESTINATION ${deploykit_bundle_destination}/${TARGET_NAME}.app/Contents/Frameworks
+                    RUNTIME DESTINATION ${deploykit_bundle_destination}/${TARGET_NAME}.app/Contents/Frameworks
                 )
                 get_target_property(lib_type ${lib} TYPE)
                 if(lib_type STREQUAL "SHARED_LIBRARY" OR lib_type STREQUAL "MODULE_LIBRARY")
                     list(APPEND deploykit_macos_analyze_binaries
-                        "\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks/$<TARGET_FILE_NAME:${lib}>"
+                        "\${bundle_prefix}/${TARGET_NAME}.app/Contents/Frameworks/$<TARGET_FILE_NAME:${lib}>"
                     )
                 endif()
             else()
                 if(EXISTS "${lib}")
                     install(FILES "${lib}"
-                        DESTINATION ${TARGET_NAME}.app/Contents/Frameworks
+                        DESTINATION ${deploykit_bundle_destination}/${TARGET_NAME}.app/Contents/Frameworks
                     )
                     get_filename_component(lib_name "${lib}" NAME)
                     list(APPEND deploykit_macos_analyze_binaries
-                        "\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks/${lib_name}"
+                        "\${bundle_prefix}/${TARGET_NAME}.app/Contents/Frameworks/${lib_name}"
                     )
                 else()
                     message(WARNING "[DeployKit] EXTRA_LIBS entry does not name a target or existing file: ${lib}")
@@ -142,16 +149,16 @@ macro(deploykit_configure_bundling TARGET_NAME)
         foreach(file ${DEPLOY_EXTRA_FILES})
             if(IS_DIRECTORY "${file}")
                 install(DIRECTORY "${file}"
-                    DESTINATION ${TARGET_NAME}.app/Contents/Frameworks
+                    DESTINATION ${deploykit_bundle_destination}/${TARGET_NAME}.app/Contents/Frameworks
                     USE_SOURCE_PERMISSIONS
                 )
             elseif(EXISTS "${file}")
                 install(FILES "${file}"
-                    DESTINATION ${TARGET_NAME}.app/Contents/Frameworks
+                    DESTINATION ${deploykit_bundle_destination}/${TARGET_NAME}.app/Contents/Frameworks
                 )
                 get_filename_component(file_name "${file}" NAME)
                 list(APPEND deploykit_macos_analyze_binaries
-                    "\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks/${file_name}"
+                    "\${bundle_prefix}/${TARGET_NAME}.app/Contents/Frameworks/${file_name}"
                 )
             else()
                 message(WARNING "[DeployKit] EXTRA_FILES entry does not exist: ${file}")
@@ -171,9 +178,15 @@ macro(deploykit_configure_bundling TARGET_NAME)
 
             install(CODE "
                 get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
-                message(STATUS \"[DeployKit] Packaging: Running macdeployqt on \${abs_prefix}/${TARGET_NAME}.app with libpaths: ${DEPLOY_LIBPATHS}...\")
+                set(deploykit_config_name \"\${CMAKE_INSTALL_CONFIG_NAME}\")
+                if(deploykit_config_name STREQUAL \"\")
+                    set(bundle_prefix \"\${abs_prefix}\")
+                else()
+                    set(bundle_prefix \"\${abs_prefix}/\${deploykit_config_name}\")
+                endif()
+                message(STATUS \"[DeployKit] Packaging: Running macdeployqt on \${bundle_prefix}/${TARGET_NAME}.app with libpaths: ${DEPLOY_LIBPATHS}...\")
                 execute_process(
-                    COMMAND \"${MACDEPLOYQT_PATH}\" \"\${abs_prefix}/${TARGET_NAME}.app\" ${macdeployqt_libpaths} -verbose=1 -no-codesign
+                    COMMAND \"${MACDEPLOYQT_PATH}\" \"\${bundle_prefix}/${TARGET_NAME}.app\" ${macdeployqt_libpaths} -verbose=1 -no-codesign
                     RESULT_VARIABLE deploy_res
                     OUTPUT_VARIABLE deploy_out
                     ERROR_VARIABLE deploy_err
@@ -194,7 +207,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
                     cmake_policy(SET CMP0207 NEW)
                 endif()
                 set(binaries_to_analyze 
-                    \"\${abs_prefix}/${TARGET_NAME}.app/Contents/MacOS/${TARGET_NAME}\"
+                    \"\${bundle_prefix}/${TARGET_NAME}.app/Contents/MacOS/${TARGET_NAME}\"
                     ${deploykit_macos_analyze_binaries}
                 )
                 set(copied_libs \"\")
@@ -229,9 +242,9 @@ macro(deploykit_configure_bundling TARGET_NAME)
                             if(dep MATCHES \"\\\\.framework/\")
                                 string(REGEX REPLACE \"^(.*\\\\.framework)/.*$\" \"\\\\1\" framework_dir \"\${dep}\")
                                 get_filename_component(framework_name \"\${framework_dir}\" NAME)
-                                if(NOT framework_dir MATCHES \"^\${abs_prefix}/\")
+                                if(NOT framework_dir MATCHES \"^\${bundle_prefix}/\")
                                     message(STATUS \"[DeployKit] Copying framework dependency: \${framework_dir}\")
-                                    file(INSTALL DESTINATION \"\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks\"
+                                    file(INSTALL DESTINATION \"\${bundle_prefix}/${TARGET_NAME}.app/Contents/Frameworks\"
                                         TYPE DIRECTORY
                                         FILES \"\${framework_dir}\"
                                     )
@@ -244,7 +257,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
                             get_filename_component(real_dep \"\${dep}\" REALPATH)
                             
                             # Copy shared library file to Frameworks directory
-                            file(INSTALL DESTINATION \"\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks\"
+                            file(INSTALL DESTINATION \"\${bundle_prefix}/${TARGET_NAME}.app/Contents/Frameworks\"
                                 TYPE SHARED_LIBRARY
                                 FILES \"\${dep}\"
                             )
@@ -252,14 +265,14 @@ macro(deploykit_configure_bundling TARGET_NAME)
                             # If symlink, copy the real file too
                             if(NOT \"\${dep}\" STREQUAL \"\${real_dep}\")
                                 message(STATUS \"[DeployKit] Copying dependency symlink target: \${real_dep}\")
-                                file(INSTALL DESTINATION \"\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks\"
+                                file(INSTALL DESTINATION \"\${bundle_prefix}/${TARGET_NAME}.app/Contents/Frameworks\"
                                     TYPE SHARED_LIBRARY
                                     FILES \"\${real_dep}\"
                                 )
                             endif()
                             
                             list(APPEND copied_libs \"\${dep_name}\")
-                            list(APPEND binaries_to_analyze \"\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks/\${dep_name}\")
+                            list(APPEND binaries_to_analyze \"\${bundle_prefix}/${TARGET_NAME}.app/Contents/Frameworks/\${dep_name}\")
                             set(new_dependencies_found TRUE)
                         endif()
                     endforeach()
@@ -285,9 +298,9 @@ macro(deploykit_configure_bundling TARGET_NAME)
                                 if(found_path MATCHES \"\\\\.framework/\")
                                     string(REGEX REPLACE \"^(.*\\\\.framework)/.*$\" \"\\\\1\" framework_dir \"\${found_path}\")
                                     get_filename_component(framework_name \"\${framework_dir}\" NAME)
-                                    if(NOT framework_dir MATCHES \"^\${abs_prefix}/\")
+                                    if(NOT framework_dir MATCHES \"^\${bundle_prefix}/\")
                                         message(STATUS \"[DeployKit] Copying framework dependency: \${framework_dir}\")
-                                        file(INSTALL DESTINATION \"\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks\"
+                                        file(INSTALL DESTINATION \"\${bundle_prefix}/${TARGET_NAME}.app/Contents/Frameworks\"
                                             TYPE DIRECTORY
                                             FILES \"\${framework_dir}\"
                                         )
@@ -300,7 +313,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
                                 get_filename_component(real_found_path \"\${found_path}\" REALPATH)
                                 
                                 # Copy the file (this copies the symlink)
-                                file(INSTALL DESTINATION \"\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks\"
+                                file(INSTALL DESTINATION \"\${bundle_prefix}/${TARGET_NAME}.app/Contents/Frameworks\"
                                     TYPE SHARED_LIBRARY
                                     FILES \"\${found_path}\"
                                 )
@@ -308,14 +321,14 @@ macro(deploykit_configure_bundling TARGET_NAME)
                                 # If symlink, copy the real file too
                                 if(NOT \"\${found_path}\" STREQUAL \"\${real_found_path}\")
                                     message(STATUS \"[DeployKit] Copying unresolved symlink target: \${real_found_path}\")
-                                    file(INSTALL DESTINATION \"\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks\"
+                                    file(INSTALL DESTINATION \"\${bundle_prefix}/${TARGET_NAME}.app/Contents/Frameworks\"
                                         TYPE SHARED_LIBRARY
                                         FILES \"\${real_found_path}\"
                                     )
                                 endif()
                                 
                                 list(APPEND copied_libs \"\${dep_name}\")
-                                list(APPEND binaries_to_analyze \"\${abs_prefix}/${TARGET_NAME}.app/Contents/Frameworks/\${dep_name}\")
+                                list(APPEND binaries_to_analyze \"\${bundle_prefix}/${TARGET_NAME}.app/Contents/Frameworks/\${dep_name}\")
                                 set(new_dependencies_found TRUE)
                             else()
                                 message(WARNING \"[DeployKit] Unresolved dependency not found in search paths: \${dep}\")
@@ -328,6 +341,11 @@ macro(deploykit_configure_bundling TARGET_NAME)
 
     elseif(WIN32)
         # 2. Windows Deployment
+        set(deploykit_runtime_dependency_directories "")
+        foreach(path ${DEPLOY_LIBPATHS})
+            string(APPEND deploykit_runtime_dependency_directories "\n                        \"${path}\"")
+        endforeach()
+
         find_program(WINDEPLOYQT_PATH windeployqt
             HINTS "${Qt6_DIR}/../../../bin" "${Qt5_DIR}/../../../bin"
             DOC "Path to windeployqt tool"
@@ -340,20 +358,20 @@ macro(deploykit_configure_bundling TARGET_NAME)
 
         # Install target
         install(TARGETS ${TARGET_NAME}
-            RUNTIME DESTINATION .
+            RUNTIME DESTINATION ${deploykit_bundle_destination}
         )
 
         # Copy extra libraries to root (next to .exe)
         foreach(lib ${DEPLOY_EXTRA_LIBS})
             if(TARGET ${lib})
                 install(TARGETS ${lib}
-                    RUNTIME DESTINATION .
-                    LIBRARY DESTINATION .
+                    RUNTIME DESTINATION ${deploykit_bundle_destination}
+                    LIBRARY DESTINATION ${deploykit_bundle_destination}
                 )
             else()
                 if(EXISTS "${lib}")
                     install(FILES "${lib}"
-                        DESTINATION .
+                        DESTINATION ${deploykit_bundle_destination}
                     )
                 else()
                     message(STATUS "[DeployKit] Non-target dependency specified: ${lib}. Ensure it is copied next to the executable.")
@@ -364,12 +382,12 @@ macro(deploykit_configure_bundling TARGET_NAME)
         foreach(file ${DEPLOY_EXTRA_FILES})
             if(IS_DIRECTORY "${file}")
                 install(DIRECTORY "${file}"
-                    DESTINATION .
+                    DESTINATION ${deploykit_bundle_destination}
                     USE_SOURCE_PERMISSIONS
                 )
             elseif(EXISTS "${file}")
                 install(FILES "${file}"
-                    DESTINATION .
+                    DESTINATION ${deploykit_bundle_destination}
                 )
             else()
                 message(WARNING "[DeployKit] EXTRA_FILES entry does not exist: ${file}")
@@ -379,9 +397,16 @@ macro(deploykit_configure_bundling TARGET_NAME)
         # Execute windeployqt as a post-install step
         if(WINDEPLOYQT_PATH)
             install(CODE "
-                message(STATUS \"[DeployKit] Packaging: Running windeployqt on \${CMAKE_INSTALL_PREFIX}/${TARGET_NAME}.exe...\")
+                get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
+                set(deploykit_config_name \"\${CMAKE_INSTALL_CONFIG_NAME}\")
+                if(deploykit_config_name STREQUAL \"\")
+                    set(bundle_prefix \"\${abs_prefix}\")
+                else()
+                    set(bundle_prefix \"\${abs_prefix}/\${deploykit_config_name}\")
+                endif()
+                message(STATUS \"[DeployKit] Packaging: Running windeployqt on \${bundle_prefix}/${TARGET_NAME}.exe...\")
                 execute_process(
-                    COMMAND \"${WINDEPLOYQT_PATH}\" \"\${CMAKE_INSTALL_PREFIX}/${TARGET_NAME}.exe\" --no-compiler-runtime --verbose=1
+                    COMMAND \"${WINDEPLOYQT_PATH}\" \"\${bundle_prefix}/${TARGET_NAME}.exe\" --no-compiler-runtime --verbose=1
                     RESULT_VARIABLE deploy_res
                 )
                 if(NOT deploy_res EQUAL 0)
@@ -389,6 +414,88 @@ macro(deploykit_configure_bundling TARGET_NAME)
                 endif()
             ")
         endif()
+
+        install(CODE "
+            get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
+            set(deploykit_config_name \"\${CMAKE_INSTALL_CONFIG_NAME}\")
+            if(deploykit_config_name STREQUAL \"\")
+                set(bundle_prefix \"\${abs_prefix}\")
+            else()
+                set(bundle_prefix \"\${abs_prefix}/\${deploykit_config_name}\")
+            endif()
+            message(STATUS \"[DeployKit] Windows Packaging: Resolving runtime dependencies recursively...\")
+            if(POLICY CMP0207)
+                cmake_policy(SET CMP0207 NEW)
+            endif()
+
+            set(binaries_to_analyze \"\${bundle_prefix}/${TARGET_NAME}.exe\")
+            file(GLOB existing_bundle_dlls \"\${bundle_prefix}/*.dll\")
+            set(copied_libs \"\")
+            foreach(existing_bundle_dll \${existing_bundle_dlls})
+                get_filename_component(existing_bundle_name \"\${existing_bundle_dll}\" NAME)
+                list(APPEND copied_libs \"\${existing_bundle_name}\")
+            endforeach()
+
+            set(new_dependencies_found TRUE)
+            while(new_dependencies_found)
+                set(new_dependencies_found FALSE)
+
+                file(GET_RUNTIME_DEPENDENCIES
+                    EXECUTABLES \${binaries_to_analyze}
+                    RESOLVED_DEPENDENCIES_VAR resolved_deps
+                    UNRESOLVED_DEPENDENCIES_VAR unresolved_deps
+                    CONFLICTING_DEPENDENCIES_PREFIX conflicting_deps
+                    DIRECTORIES ${deploykit_runtime_dependency_directories}
+                )
+
+                foreach(dep \${resolved_deps})
+                    file(TO_CMAKE_PATH \"\${dep}\" dep_cmake)
+                    string(TOLOWER \"\${dep_cmake}\" dep_lower)
+                    if(dep_lower MATCHES \"^[a-z]:/windows/\")
+                        continue()
+                    endif()
+
+                    get_filename_component(dep_name \"\${dep}\" NAME)
+                    if(dep_name MATCHES \"^Qt[0-9].*\\\\.dll$\")
+                        continue()
+                    endif()
+                    if(CMAKE_INSTALL_CONFIG_NAME MATCHES \"^[Dd][Ee][Bb][Uu][Gg]$\" AND
+                       dep_name MATCHES \"^vtkGUISupportQt-.*\\\\.dll$\")
+                        message(WARNING \"[DeployKit] Skipping Release VTK Qt runtime for Debug bundle: \${dep}. Build a Release bundle or provide a Debug VTK build for a standalone VTK Qt bundle.\")
+                        if(EXISTS \"\${bundle_prefix}/\${dep_name}\")
+                            file(REMOVE \"\${bundle_prefix}/\${dep_name}\")
+                        endif()
+                        list(APPEND copied_libs \"\${dep_name}\")
+                        continue()
+                    endif()
+
+                    list(FIND copied_libs \"\${dep_name}\" idx)
+                    if(idx EQUAL -1)
+                        message(STATUS \"[DeployKit] Copying dependency: \${dep}\")
+                        file(INSTALL DESTINATION \"\${bundle_prefix}\"
+                            TYPE SHARED_LIBRARY
+                            FILES \"\${dep}\"
+                        )
+                        list(APPEND copied_libs \"\${dep_name}\")
+                        list(APPEND binaries_to_analyze \"\${bundle_prefix}/\${dep_name}\")
+                        set(new_dependencies_found TRUE)
+                    endif()
+                endforeach()
+
+                foreach(dep \${unresolved_deps})
+                    get_filename_component(dep_name \"\${dep}\" NAME)
+                    if(dep_name MATCHES \"^api-ms-\" OR
+                       dep_name MATCHES \"^ext-ms-\" OR
+                       dep_name MATCHES \"^AzureAttest\" OR
+                       dep_name MATCHES \"^Hvsi\" OR
+                       dep_name MATCHES \"^PdmUtilities\\\\.dll\" OR
+                       dep_name MATCHES \"^wpaxholder\\\\.dll\")
+                        continue()
+                    endif()
+                    message(WARNING \"[DeployKit] Unresolved dependency not found in search paths: \${dep}\")
+                endforeach()
+            endwhile()
+        ")
 
     else()
         # 3. Linux Deployment (Standard RPATH layout)
@@ -399,7 +506,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
         message(STATUS "[DeployKit] Linux: patchelf executable: ${DEPLOYKIT_PATCHELF_EXECUTABLE}")
 
         install(TARGETS ${TARGET_NAME}
-            RUNTIME DESTINATION .
+            RUNTIME DESTINATION ${deploykit_bundle_destination}
         )
 
         # Copy Qt runtime plugins. Debian-style Qt installs keep plugins under
@@ -469,7 +576,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
             foreach(plugin_dir ${QT_PLUGINS_TO_COPY})
                 if(EXISTS "${deploykit_qt_plugin_root}/${plugin_dir}")
                     install(DIRECTORY "${deploykit_qt_plugin_root}/${plugin_dir}"
-                        DESTINATION plugins
+                        DESTINATION ${deploykit_bundle_destination}/plugins
                         USE_SOURCE_PERMISSIONS
                     )
                     message(STATUS "[DeployKit] Linux: Copying Qt plugin directory: ${plugin_dir}")
@@ -482,8 +589,14 @@ macro(deploykit_configure_bundling TARGET_NAME)
         # Create qt.conf next to the executable to point to local plugins
         install(CODE "
             get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
-            file(WRITE \"\${abs_prefix}/qt.conf\" \"[Paths]\\nPlugins = plugins\\nPrefix = .\\n\")
-            message(STATUS \"[DeployKit] Created \${abs_prefix}/qt.conf\")
+            set(deploykit_config_name \"\${CMAKE_INSTALL_CONFIG_NAME}\")
+            if(deploykit_config_name STREQUAL \"\")
+                set(bundle_prefix \"\${abs_prefix}\")
+            else()
+                set(bundle_prefix \"\${abs_prefix}/\${deploykit_config_name}\")
+            endif()
+            file(WRITE \"\${bundle_prefix}/qt.conf\" \"[Paths]\\nPlugins = plugins\\nPrefix = .\\n\")
+            message(STATUS \"[DeployKit] Created \${bundle_prefix}/qt.conf\")
         ")
 
         # Install extra libraries to lib/
@@ -491,27 +604,27 @@ macro(deploykit_configure_bundling TARGET_NAME)
         foreach(lib ${DEPLOY_EXTRA_LIBS})
             if(TARGET ${lib})
                 install(TARGETS ${lib}
-                    LIBRARY DESTINATION lib
-                    RUNTIME DESTINATION .
+                    LIBRARY DESTINATION ${deploykit_bundle_destination}/lib
+                    RUNTIME DESTINATION ${deploykit_bundle_destination}
                 )
                 get_target_property(lib_type ${lib} TYPE)
                 if(lib_type STREQUAL "SHARED_LIBRARY" OR lib_type STREQUAL "MODULE_LIBRARY")
                     list(APPEND deploykit_linux_analyze_binaries
-                        "\${abs_prefix}/lib/$<TARGET_FILE_NAME:${lib}>"
+                        "\${bundle_prefix}/lib/$<TARGET_FILE_NAME:${lib}>"
                     )
                 elseif(lib_type STREQUAL "EXECUTABLE")
                     list(APPEND deploykit_linux_analyze_binaries
-                        "\${abs_prefix}/$<TARGET_FILE_NAME:${lib}>"
+                        "\${bundle_prefix}/$<TARGET_FILE_NAME:${lib}>"
                     )
                 endif()
             else()
                 if(EXISTS "${lib}")
                     install(FILES "${lib}"
-                        DESTINATION lib
+                        DESTINATION ${deploykit_bundle_destination}/lib
                     )
                     get_filename_component(lib_name "${lib}" NAME)
                     list(APPEND deploykit_linux_analyze_binaries
-                        "\${abs_prefix}/lib/${lib_name}"
+                        "\${bundle_prefix}/lib/${lib_name}"
                     )
                 else()
                     message(WARNING "[DeployKit] EXTRA_LIBS entry does not name a target or existing file: ${lib}")
@@ -522,16 +635,16 @@ macro(deploykit_configure_bundling TARGET_NAME)
         foreach(file ${DEPLOY_EXTRA_FILES})
             if(IS_DIRECTORY "${file}")
                 install(DIRECTORY "${file}"
-                    DESTINATION lib
+                    DESTINATION ${deploykit_bundle_destination}/lib
                     USE_SOURCE_PERMISSIONS
                 )
             elseif(EXISTS "${file}")
                 install(FILES "${file}"
-                    DESTINATION lib
+                    DESTINATION ${deploykit_bundle_destination}/lib
                 )
                 get_filename_component(file_name "${file}" NAME)
                 list(APPEND deploykit_linux_analyze_binaries
-                    "\${abs_prefix}/lib/${file_name}"
+                    "\${bundle_prefix}/lib/${file_name}"
                 )
             else()
                 message(WARNING "[DeployKit] EXTRA_FILES entry does not exist: ${file}")
@@ -564,15 +677,21 @@ macro(deploykit_configure_bundling TARGET_NAME)
         # Automatically copy runtime dependencies (like VTK, OpenCV) to lib/ recursively
         install(CODE "
             get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
+            set(deploykit_config_name \"\${CMAKE_INSTALL_CONFIG_NAME}\")
+            if(deploykit_config_name STREQUAL \"\")
+                set(bundle_prefix \"\${abs_prefix}\")
+            else()
+                set(bundle_prefix \"\${abs_prefix}/\${deploykit_config_name}\")
+            endif()
             message(STATUS \"[DeployKit] Linux Packaging: Resolving runtime dependencies recursively...\")
             if(POLICY CMP0207)
                 cmake_policy(SET CMP0207 NEW)
             endif()
             
-            file(GLOB_RECURSE qt_plugin_binaries \"\${abs_prefix}/plugins/*.so\")
+            file(GLOB_RECURSE qt_plugin_binaries \"\${bundle_prefix}/plugins/*.so\")
             
             set(binaries_to_analyze 
-                \"\${abs_prefix}/${TARGET_NAME}\"
+                \"\${bundle_prefix}/${TARGET_NAME}\"
                 ${deploykit_linux_analyze_binaries}
                 \${qt_plugin_binaries}
             )
@@ -608,7 +727,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
                         get_filename_component(real_dep \"\${dep}\" REALPATH)
                         
                         # Copy shared library file to lib directory
-                        file(INSTALL DESTINATION \"\${abs_prefix}/lib\"
+                        file(INSTALL DESTINATION \"\${bundle_prefix}/lib\"
                             TYPE SHARED_LIBRARY
                             FILES \"\${dep}\"
                         )
@@ -616,14 +735,14 @@ macro(deploykit_configure_bundling TARGET_NAME)
                         # If symlink, copy the real file too
                         if(NOT \"\${dep}\" STREQUAL \"\${real_dep}\")
                             message(STATUS \"[DeployKit] Copying dependency symlink target: \${real_dep}\")
-                            file(INSTALL DESTINATION \"\${abs_prefix}/lib\"
+                            file(INSTALL DESTINATION \"\${bundle_prefix}/lib\"
                                 TYPE SHARED_LIBRARY
                                 FILES \"\${real_dep}\"
                             )
                         endif()
 
                         list(APPEND copied_libs \"\${dep_name}\")
-                        list(APPEND binaries_to_analyze \"\${abs_prefix}/lib/\${dep_name}\")
+                        list(APPEND binaries_to_analyze \"\${bundle_prefix}/lib/\${dep_name}\")
                         set(new_dependencies_found TRUE)
                     endif()
                 endforeach()
@@ -645,19 +764,19 @@ macro(deploykit_configure_bundling TARGET_NAME)
                             message(STATUS \"[DeployKit] Copying unresolved dependency (found in search paths): \${found_path}\")
                             get_filename_component(real_found_path \"\${found_path}\" REALPATH)
                             
-                            file(INSTALL DESTINATION \"\${abs_prefix}/lib\"
+                            file(INSTALL DESTINATION \"\${bundle_prefix}/lib\"
                                 TYPE SHARED_LIBRARY
                                 FILES \"\${found_path}\"
                             )
                             if(NOT \"\${found_path}\" STREQUAL \"\${real_found_path}\")
-                                file(INSTALL DESTINATION \"\${abs_prefix}/lib\"
+                                file(INSTALL DESTINATION \"\${bundle_prefix}/lib\"
                                     TYPE SHARED_LIBRARY
                                     FILES \"\${real_found_path}\"
                                 )
                             endif()
                             
                             list(APPEND copied_libs \"\${dep_name}\")
-                            list(APPEND binaries_to_analyze \"\${abs_prefix}/lib/\${dep_name}\")
+                            list(APPEND binaries_to_analyze \"\${bundle_prefix}/lib/\${dep_name}\")
                             set(new_dependencies_found TRUE)
                         else()
                             message(WARNING \"[DeployKit] Unresolved dependency not found in search paths: \${dep}\")
@@ -685,18 +804,18 @@ macro(deploykit_configure_bundling TARGET_NAME)
                 message(STATUS \"[DeployKit] RPATH set: \${binary} -> \${rpath}\")
             endfunction()
 
-            deploykit_set_linux_rpath(\"\${abs_prefix}/${TARGET_NAME}\" \"$ORIGIN/lib\")
+            deploykit_set_linux_rpath(\"\${bundle_prefix}/${TARGET_NAME}\" \"$ORIGIN/lib\")
 
             file(GLOB_RECURSE bundled_libs
-                \"\${abs_prefix}/lib/*.so\"
-                \"\${abs_prefix}/lib/*.so.*\"
+                \"\${bundle_prefix}/lib/*.so\"
+                \"\${bundle_prefix}/lib/*.so.*\"
             )
             list(REMOVE_DUPLICATES bundled_libs)
             foreach(bundled_lib IN LISTS bundled_libs)
                 deploykit_set_linux_rpath(\"\${bundled_lib}\" \"$ORIGIN\")
             endforeach()
 
-            file(GLOB_RECURSE bundled_qt_plugins \"\${abs_prefix}/plugins/*.so\")
+            file(GLOB_RECURSE bundled_qt_plugins \"\${bundle_prefix}/plugins/*.so\")
             foreach(plugin_binary IN LISTS bundled_qt_plugins)
                 deploykit_set_linux_rpath(\"\${plugin_binary}\" \"$ORIGIN/../../lib:$ORIGIN\")
             endforeach()
@@ -705,13 +824,13 @@ macro(deploykit_configure_bundling TARGET_NAME)
 
     # Building the target should also refresh the bundle output.
     add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}"
+        COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}" --config "$<CONFIG>"
         COMMENT "[DeployKit] Bundling and installing ${TARGET_NAME} to ${CMAKE_INSTALL_PREFIX}..."
     )
 
     # Keep an explicit bundle target for manual re-bundling.
     add_custom_target(Bundle${TARGET_NAME}
-        COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}"
+        COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}" --config "$<CONFIG>"
         COMMENT "[DeployKit] Re-bundling and installing ${TARGET_NAME} to ${CMAKE_INSTALL_PREFIX}..."
     )
     add_dependencies(Bundle${TARGET_NAME} ${TARGET_NAME})

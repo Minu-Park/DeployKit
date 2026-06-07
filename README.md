@@ -31,13 +31,15 @@ deploykit_configure_bundling(MyApp
 ## Platform Behavior
 
 - macOS: installs an app bundle, runs `macdeployqt` when available, copies extra libraries into `Contents/Frameworks`, and runs recursive dependency scanning.
-- Windows: installs the executable, copies extra libraries next to it, and runs `windeployqt` when available.
+- Windows: installs each configuration under its own bundle subdirectory, copies extra libraries next to the executable, runs `windeployqt` when available, and recursively copies non-system runtime dependencies. Debug bundles skip release-only VTK Qt runtimes.
+- All platforms place generated bundle contents below a configuration subdirectory such as `Debug` or `Release` to avoid runtime mixing when one build tree produces multiple configurations.
 - Linux: installs the executable, copies selected Qt plugin directories into `plugins`, writes `qt.conf`, installs extra libraries under `lib`, runs recursive dependency scanning, and rewrites bundled ELF RPATH/RUNPATH entries with `patchelf`.
 - CPack is configured as `DragNDrop` on macOS, `ZIP` on Windows, and `TGZ` on Linux.
 
 ## Current Limitations
 
 - Product-specific files that are loaded dynamically without a binary link edge cannot be inferred from the CMake target graph.
+- Consumers must pass those product-specific dynamic assets through `EXTRA_FILES`; DeployKit should not hardcode SDK names such as Basler pylon or VTK.
 - Linux Qt plugin selection is fixed to a small default list.
 - Linux Qt plugin discovery depends on `Qt::qmake -query QT_INSTALL_PLUGINS` or known Qt CMake install layouts.
 - Linux bundling requires `patchelf`; DeployKit fails configuration if it is unavailable because copied ELF files must resolve through the bundled runtime layout.
