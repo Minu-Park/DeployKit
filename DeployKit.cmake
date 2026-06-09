@@ -61,9 +61,9 @@ macro(deploykit_configure_bundling TARGET_NAME)
        CMAKE_INSTALL_PREFIX STREQUAL "/usr/local" OR 
        CMAKE_INSTALL_PREFIX MATCHES "^[a-zA-Z]:/Program Files")
         if(APPLE)
-            set(deploykit_default_install_prefix "${CMAKE_SOURCE_DIR}/build/bundled")
+            set(deploykit_default_install_prefix "${CMAKE_SOURCE_DIR}/build/bundle")
         else()
-            set(deploykit_default_install_prefix "${CMAKE_BINARY_DIR}/bundled")
+            set(deploykit_default_install_prefix "${CMAKE_BINARY_DIR}/bundle")
         endif()
         set(CMAKE_INSTALL_PREFIX "${deploykit_default_install_prefix}" CACHE PATH "Install path prefix" FORCE)
         message(STATUS "[DeployKit] Setting default CMAKE_INSTALL_PREFIX to: ${CMAKE_INSTALL_PREFIX}")
@@ -361,7 +361,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
             RUNTIME DESTINATION ${deploykit_bundle_destination}
         )
 
-        # Copy extra libraries to root (next to .exe)
+        # Copy extra libraries next to .exe (they may be implicit imports)
         foreach(lib ${DEPLOY_EXTRA_LIBS})
             if(TARGET ${lib})
                 install(TARGETS ${lib}
