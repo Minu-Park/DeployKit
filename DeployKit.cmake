@@ -336,6 +336,41 @@ macro(deploykit_configure_bundling TARGET_NAME)
                         endif()
                     endforeach()
                 endwhile()
+
+            # Ad-hoc codesign the bundle. Sign via /tmp to avoid iCloud/fileprovider
+            # xattr interference, and sign inside-out (frameworks then app).
+            message(STATUS \"[DeployKit] Ad-hoc code signing \${bundle_prefix}/${TARGET_NAME}.app ...\")
+            set(_dk_sign_source \"\${bundle_prefix}/${TARGET_NAME}.app\")
+            set(_dk_tmp \"/tmp/_deploykit_sign_${TARGET_NAME}.app\")
+            file(REMOVE_RECURSE \"\${_dk_tmp}\")
+            execute_process(COMMAND \${CMAKE_COMMAND} -E copy_directory \"\${_dk_sign_source}\" \"\${_dk_tmp}\")
+            execute_process(COMMAND xattr -rc \"\${_dk_tmp}\" ERROR_QUIET)
+
+            # Sign frameworks and dylibs first
+            file(GLOB _dk_frameworks \"\${_dk_tmp}/Contents/Frameworks/*.framework\")
+            file(GLOB _dk_dylibs \"\${_dk_tmp}/Contents/Frameworks/*.dylib\")
+            foreach(_dk_item \${_dk_frameworks} \${_dk_dylibs})
+                execute_process(
+                    COMMAND codesign --force -s - \"\${_dk_item}\"
+                    ERROR_QUIET
+                )
+            endforeach()
+
+            # Sign the top-level app bundle
+            execute_process(
+                COMMAND codesign --force -s - \"\${_dk_tmp}\"
+                RESULT_VARIABLE codesign_res
+                ERROR_VARIABLE codesign_err
+            )
+            if(codesign_res EQUAL 0)
+                file(REMOVE_RECURSE \"\${_dk_sign_source}\")
+                execute_process(COMMAND \${CMAKE_COMMAND} -E copy_directory \"\${_dk_tmp}\" \"\${_dk_sign_source}\")
+                file(REMOVE_RECURSE \"\${_dk_tmp}\")
+                message(STATUS \"[DeployKit] Ad-hoc codesign complete.\")
+            else()
+                file(REMOVE_RECURSE \"\${_dk_tmp}\")
+                message(WARNING \"[DeployKit] Ad-hoc codesign failed: \${codesign_err}\")
+            endif()
             ")
         endif()
 
