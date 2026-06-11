@@ -553,6 +553,8 @@ macro(deploykit_configure_bundling TARGET_NAME)
             iconengines
             platformthemes
             egldeviceintegrations
+            wayland-decoration-client
+            wayland-graphics-integration-client
             wayland-shell-integration
         )
         set(deploykit_qt_plugin_root "")
