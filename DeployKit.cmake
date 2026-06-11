@@ -42,6 +42,8 @@ function(_deploykit_collect_target_runtime_paths ROOT_TARGET TARGET_NAME OUT_VAR
 endfunction()
 
 macro(deploykit_configure_bundling TARGET_NAME)
+    option(DEPLOYKIT_CLEAN_BUNDLE "Remove the existing bundle directory before installing." OFF)
+
     # Parse arguments
     set(options)
     set(oneValueArgs MACOSX_ICON)
@@ -81,21 +83,23 @@ macro(deploykit_configure_bundling TARGET_NAME)
         set(deploykit_installed_target_path "${CMAKE_INSTALL_PREFIX}/${deploykit_bundle_destination}/${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
     endif()
 
-    install(CODE "
-        get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
-        set(deploykit_config_name \"\${CMAKE_INSTALL_CONFIG_NAME}\")
-        if(deploykit_config_name STREQUAL \"\")
-            set(deploykit_bundle_prefix \"\${abs_prefix}\")
-        else()
-            set(deploykit_bundle_prefix \"\${abs_prefix}/\${deploykit_config_name}\")
-        endif()
-        if(EXISTS \"\${deploykit_bundle_prefix}\")
-            file(REMOVE_RECURSE \"\${deploykit_bundle_prefix}\")
-            if(EXISTS \"\${deploykit_bundle_prefix}\")
-                message(FATAL_ERROR \"[DeployKit] Existing bundle directory is not removable: \${deploykit_bundle_prefix}\")
+    if(DEPLOYKIT_CLEAN_BUNDLE)
+        install(CODE "
+            get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
+            set(deploykit_config_name \"\${CMAKE_INSTALL_CONFIG_NAME}\")
+            if(deploykit_config_name STREQUAL \"\")
+                set(deploykit_bundle_prefix \"\${abs_prefix}\")
+            else()
+                set(deploykit_bundle_prefix \"\${abs_prefix}/\${deploykit_config_name}\")
             endif()
-        endif()
-    ")
+            if(EXISTS \"\${deploykit_bundle_prefix}\")
+                file(REMOVE_RECURSE \"\${deploykit_bundle_prefix}\")
+                if(EXISTS \"\${deploykit_bundle_prefix}\")
+                    message(FATAL_ERROR \"[DeployKit] Existing bundle directory is not removable: \${deploykit_bundle_prefix}\")
+                endif()
+            endif()
+        ")
+    endif()
 
     # Set up install destinations depending on platform
     if(APPLE)

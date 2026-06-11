@@ -20,6 +20,8 @@ deploykit_configure_bundling(MyApp
 
 `deploykit_configure_bundling(<target>)` installs the target after each target build and creates a `Bundle<target>` custom target for manual re-bundling. The default output is `${CMAKE_SOURCE_DIR}/build/bundle` on macOS and `${CMAKE_BINARY_DIR}/bundle` on Linux and Windows.
 
+By default, DeployKit preserves an existing bundle directory so unchanged files can remain in place across incremental installs. Configure with `-DDEPLOYKIT_CLEAN_BUNDLE=ON` when a clean bundle directory is required before install.
+
 ## Arguments
 
 - `LIBPATHS`: extra directories used by deployment tools and CMake runtime dependency scanning.
