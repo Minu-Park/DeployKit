@@ -46,7 +46,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
 
     # Parse arguments
     set(options)
-    set(oneValueArgs MACOSX_ICON)
+    set(oneValueArgs MACOSX_ICON DESTINATION)
     set(multiValueArgs EXTRA_LIBS EXTRA_FILES LIBPATHS ANALYZE_BINARIES)
     cmake_parse_arguments(DEPLOY "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
@@ -75,12 +75,22 @@ macro(deploykit_configure_bundling TARGET_NAME)
     if(NOT deploykit_target_output_name)
         set(deploykit_target_output_name "${TARGET_NAME}")
     endif()
-    set(deploykit_bundle_destination "$<CONFIG>")
+    if(DEFINED DEPLOY_DESTINATION)
+        set(deploykit_bundle_destination "${DEPLOY_DESTINATION}")
+    else()
+        set(deploykit_bundle_destination "$<CONFIG>")
+    endif()
+
+    if(deploykit_bundle_destination STREQUAL "" OR deploykit_bundle_destination STREQUAL ".")
+        set(deploykit_bundle_dest_path "")
+    else()
+        set(deploykit_bundle_dest_path "${deploykit_bundle_destination}/")
+    endif()
 
     if(APPLE)
-        set(deploykit_installed_target_path "${CMAKE_INSTALL_PREFIX}/${deploykit_bundle_destination}/${deploykit_target_output_name}.app")
+        set(deploykit_installed_target_path "${CMAKE_INSTALL_PREFIX}/${deploykit_bundle_dest_path}${deploykit_target_output_name}.app")
     else()
-        set(deploykit_installed_target_path "${CMAKE_INSTALL_PREFIX}/${deploykit_bundle_destination}/${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
+        set(deploykit_installed_target_path "${CMAKE_INSTALL_PREFIX}/${deploykit_bundle_dest_path}${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
     endif()
 
     if(DEPLOYKIT_CLEAN_BUNDLE)
@@ -433,19 +443,32 @@ macro(deploykit_configure_bundling TARGET_NAME)
             endif()
         endforeach()
 
+        # Include MSVC runtime libraries (vcruntime140.dll, msvcp140.dll, etc.) in the package
+        if(WIN32)
+            set(CMAKE_INSTALL_OPENMP_LIBRARIES ON)
+            set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION "${deploykit_bundle_destination}")
+            include(InstallRequiredSystemLibraries)
+        endif()
+
+        if(deploykit_bundle_destination MATCHES "\\$<CONFIG>")
+            set(install_time_dest "\${CMAKE_INSTALL_CONFIG_NAME}")
+        else()
+            set(install_time_dest "${deploykit_bundle_destination}")
+        endif()
+
         # Execute windeployqt as a post-install step
         if(WINDEPLOYQT_PATH)
             install(CODE "
                 get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
-                set(deploykit_config_name \"\${CMAKE_INSTALL_CONFIG_NAME}\")
-                if(deploykit_config_name STREQUAL \"\")
+                set(dest_sub \"${install_time_dest}\")
+                if(dest_sub STREQUAL \"\" OR dest_sub STREQUAL \".\")
                     set(bundle_prefix \"\${abs_prefix}\")
                 else()
-                    set(bundle_prefix \"\${abs_prefix}/\${deploykit_config_name}\")
+                    set(bundle_prefix \"\${abs_prefix}/\${dest_sub}\")
                 endif()
                 message(STATUS \"[DeployKit] Packaging: Running windeployqt on \${bundle_prefix}/${TARGET_NAME}.exe...\")
                 execute_process(
-                    COMMAND \"${WINDEPLOYQT_PATH}\" \"\${bundle_prefix}/${TARGET_NAME}.exe\" --no-compiler-runtime --verbose=1
+                    COMMAND \"${WINDEPLOYQT_PATH}\" \"\${bundle_prefix}/${TARGET_NAME}.exe\" --no-translations --verbose=1
                     RESULT_VARIABLE deploy_res
                 )
                 if(NOT deploy_res EQUAL 0)
@@ -456,11 +479,11 @@ macro(deploykit_configure_bundling TARGET_NAME)
 
         install(CODE "
             get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
-            set(deploykit_config_name \"\${CMAKE_INSTALL_CONFIG_NAME}\")
-            if(deploykit_config_name STREQUAL \"\")
+            set(dest_sub \"${install_time_dest}\")
+            if(dest_sub STREQUAL \"\" OR dest_sub STREQUAL \".\")
                 set(bundle_prefix \"\${abs_prefix}\")
             else()
-                set(bundle_prefix \"\${abs_prefix}/\${deploykit_config_name}\")
+                set(bundle_prefix \"\${abs_prefix}/\${dest_sub}\")
             endif()
             message(STATUS \"[DeployKit] Windows Packaging: Resolving runtime dependencies recursively...\")
             if(POLICY CMP0207)
@@ -877,18 +900,58 @@ macro(deploykit_configure_bundling TARGET_NAME)
     add_dependencies(Bundle${TARGET_NAME} ${TARGET_NAME})
 
     # 4. CPack Configuration
-    set(CPACK_PACKAGE_NAME "${TARGET_NAME}")
-    set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
-    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "${PROJECT_DESCRIPTION}")
-    set(CPACK_PACKAGE_VENDOR "Minu-Park")
+    if(NOT DEFINED CPACK_PACKAGE_NAME)
+        set(CPACK_PACKAGE_NAME "${TARGET_NAME}")
+    endif()
+    if(NOT DEFINED CPACK_PACKAGE_VERSION)
+        set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+    endif()
+    if(NOT DEFINED CPACK_PACKAGE_DESCRIPTION_SUMMARY)
+        set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "${PROJECT_DESCRIPTION}")
+    endif()
+    if(NOT DEFINED CPACK_PACKAGE_VENDOR)
+        set(CPACK_PACKAGE_VENDOR "Minu-Park")
+    endif()
 
     if(APPLE)
         set(CPACK_GENERATOR "DragNDrop")
         set(CPACK_DMG_VOLUME_NAME "${TARGET_NAME}")
         set(CPACK_SYSTEM_NAME "macOS")
     elseif(WIN32)
-        set(CPACK_GENERATOR "ZIP")
+        if(NOT DEFINED CPACK_GENERATOR)
+            set(CPACK_GENERATOR "NSIS")
+        endif()
         set(CPACK_SYSTEM_NAME "win64")
+
+        # Automatically resolve Resource AppIcon path if exists
+        set(deploykit_icon_path "${CMAKE_SOURCE_DIR}/modules/Resources/AppIcons/AppIcon.ico")
+        if(EXISTS "${deploykit_icon_path}")
+            file(TO_NATIVE_PATH "${deploykit_icon_path}" deploykit_icon_native)
+            string(REPLACE "\\" "\\\\" deploykit_icon_native_esc "${deploykit_icon_native}")
+            set(CPACK_NSIS_MUI_ICON "${deploykit_icon_native_esc}")
+            set(CPACK_NSIS_MUI_UNIICON "${deploykit_icon_native_esc}")
+        endif()
+
+        # Create Desktop and Start Menu shortcuts
+        if(NOT DEFINED CPACK_NSIS_MENU_LINKS)
+            set(CPACK_NSIS_MENU_LINKS "${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}" "${CPACK_PACKAGE_NAME}")
+        endif()
+        if(NOT DEFINED CPACK_CREATE_DESKTOP_LINKS)
+            set(CPACK_CREATE_DESKTOP_LINKS "${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
+        endif()
+
+        # Custom run function to ensure Working Directory ($INSTDIR) is set before running the app
+        if(NOT DEFINED CPACK_NSIS_DEFINES)
+            set(CPACK_NSIS_DEFINES "
+              !define MUI_FINISHPAGE_RUN
+              !define MUI_FINISHPAGE_RUN_FUNCTION Run${TARGET_NAME}Custom
+
+              Function Run${TARGET_NAME}Custom
+                SetOutPath \\\"\$INSTDIR\\\"
+                Exec \\\"\$INSTDIR\\\\${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}\\\"
+              FunctionEnd
+            ")
+        endif()
     else()
         set(CPACK_GENERATOR "TGZ")
         set(CPACK_SYSTEM_NAME "linux")
