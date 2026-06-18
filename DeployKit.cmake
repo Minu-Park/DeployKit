@@ -941,11 +941,11 @@ macro(deploykit_configure_bundling TARGET_NAME)
             set(CPACK_IFW_PACKAGE_WIZARD_STYLE "Modern")
             set(CPACK_IFW_PACKAGE_WIZARD_SHOW_PAGE_LIST "OFF") # Hides side page list panel for a cleaner flat design
 
-            # Visual logo branding
-            set(deploykit_logo "${CMAKE_SOURCE_DIR}/modules/Resources/BASLER_Logo.png")
-            if(EXISTS "${deploykit_logo}")
-                set(CPACK_IFW_PACKAGE_LOGO "${deploykit_logo}")
-            endif()
+            # Visual logo branding (Disabled by user request)
+            # set(deploykit_logo "${CMAKE_SOURCE_DIR}/modules/Resources/BASLER_Logo.png")
+            # if(EXISTS "${deploykit_logo}")
+            #     set(CPACK_IFW_PACKAGE_LOGO "${deploykit_logo}")
+            # endif()
 
             # Register extra Qt resources (QRC) containing brand fonts and icons
             set(deploykit_qrc "${CMAKE_SOURCE_DIR}/modules/Resources/Resources.qrc")
