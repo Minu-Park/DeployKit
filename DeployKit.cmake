@@ -940,6 +940,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
             # Layout and visual styles to hide classical sidebar and modernize layout
             set(CPACK_IFW_PACKAGE_WIZARD_STYLE "Modern")
             set(CPACK_IFW_PACKAGE_WIZARD_SHOW_PAGE_LIST "OFF") # Hides side page list panel for a cleaner flat design
+            set(CPACK_IFW_PACKAGE_WIZARD_SHOW_SETTINGS_BUTTON "OFF") # Hides the settings/repository dialog button completely
 
             # Visual logo branding
             set(deploykit_logo "${CMAKE_SOURCE_DIR}/modules/Resources/BASLER_Logo.png")
