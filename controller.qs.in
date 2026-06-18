@@ -1,28 +1,4 @@
 function Controller() {
-    var wizard = gui.wizard();
-    if (wizard) {
-        wizard.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint);
-        wizard.setAttribute(Qt.WA_TranslucentBackground, true);
-    }
+    installer.setDefaultPageVisible(QInstaller.ComponentSelection, false);
 }
 
-Controller.prototype.IntroductionPageCallback = function() {
-    // Forcefully disable/hide the Settings button on the introduction page
-    gui.setSettingsButtonEnabled(false);
-    
-    var wizard = gui.wizard();
-    if (wizard) {
-        // Double-check flag configuration inside the first page callback
-        wizard.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint);
-        wizard.setAttribute(Qt.WA_TranslucentBackground, true);
-        
-        var settingsButton = gui.findChild(wizard, "SettingsButton");
-        if (settingsButton) {
-            settingsButton.visible = false;
-        }
-        var settingsButtonLower = gui.findChild(wizard, "settingsButton");
-        if (settingsButtonLower) {
-            settingsButtonLower.visible = false;
-        }
-    }
-}

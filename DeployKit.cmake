@@ -939,13 +939,14 @@ macro(deploykit_configure_bundling TARGET_NAME)
 
             # Layout and visual styles to hide classical sidebar and modernize layout
             set(CPACK_IFW_PACKAGE_WIZARD_STYLE "Modern")
-            set(CPACK_IFW_PACKAGE_WIZARD_SHOW_PAGE_LIST "OFF") # Hides side page list panel for a cleaner flat design
+            set(CPACK_IFW_PACKAGE_WIZARD_SHOW_PAGE_LIST "OFF")
+            set(CPACK_IFW_PACKAGE_TRANSLATIONS "en")
 
-            # Visual logo branding (Disabled by user request)
-            # set(deploykit_logo "${CMAKE_SOURCE_DIR}/modules/Resources/BASLER_Logo.png")
-            # if(EXISTS "${deploykit_logo}")
-            #     set(CPACK_IFW_PACKAGE_LOGO "${deploykit_logo}")
-            # endif()
+            # Visual logo branding (scaled for installer header)
+            set(deploykit_logo "${DEPLOYKIT_MODULE_DIR}/installer_logo.png")
+            if(EXISTS "${deploykit_logo}")
+                set(CPACK_IFW_PACKAGE_LOGO "${deploykit_logo}")
+            endif()
 
             # Register extra Qt resources (QRC) containing brand fonts and icons
             set(deploykit_qrc "${CMAKE_SOURCE_DIR}/modules/Resources/Resources.qrc")
@@ -973,9 +974,9 @@ macro(deploykit_configure_bundling TARGET_NAME)
             endif()
 
             # Post-install auto-start configuration (Run on Finish page)
-            # Use cmd.exe start with /D to force correct working directory (resolves DLL loading issues)
-            set(CPACK_IFW_PACKAGE_RUN_PROGRAM "cmd.exe")
-            set(CPACK_IFW_PACKAGE_RUN_PROGRAM_ARGUMENTS "/C" "start" "/D" "@TargetDir@" "${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
+            # Use powershell Start-Process with -WorkingDirectory to force correct working directory (resolves DLL loading issues and forward slash path space errors)
+            set(CPACK_IFW_PACKAGE_RUN_PROGRAM "powershell.exe")
+            set(CPACK_IFW_PACKAGE_RUN_PROGRAM_ARGUMENTS "-NoProfile" "-Command" "Start-Process -FilePath '@TargetDir@/${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}' -WorkingDirectory '@TargetDir@'")
             set(CPACK_IFW_PACKAGE_RUN_PROGRAM_DESCRIPTION "Run Basler Playground")
 
             # Set variables for shortcut script template
@@ -1058,8 +1059,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
         if(EXISTS "${deploykit_vs_bootstrapper}")
             cpack_add_component(VCBuildTools
                 DISPLAY_NAME "Visual Studio Build Tools"
-                DESCRIPTION "Optional installation of MSVC Compiler Build Tools (via vs_BuildTools.exe bootstrapper)"
-                DISABLED
+                DESCRIPTION "MSVC compiler toolchain required for real-time script compilation"
             )
 
             cpack_ifw_configure_component(VCBuildTools

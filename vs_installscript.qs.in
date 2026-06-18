@@ -1,18 +1,50 @@
 function Component() {
-    // Constructor
 }
 
 Component.prototype.createOperations = function() {
-    // Run default file extraction
     component.createOperations();
 
-    if (systemInfo.productType === "windows") {
-        // Execute the vs_BuildTools.exe bootstrapper in passive mode.
-        // --passive: Show progress bar but require no user interaction.
-        // --norestart: Prevent automatic machine restart after installation.
-        component.addOperation("Execute",
-                               "@TargetDir@/Resources/vs_BuildTools.exe",
-                               "--passive",
-                               "--norestart");
+    if (systemInfo.productType !== "windows")
+        return;
+
+    var vswhere = "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe";
+    var vsDetected = false;
+
+    try {
+        var result = installer.execute(vswhere,
+            ["-latest", "-products", "*",
+             "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+             "-property", "installationPath"]);
+        // installer.execute returns [stdout, exitCode]
+        if (result.length >= 2 && result[1] == 0 && result[0].trim() !== "") {
+            vsDetected = true;
+        }
+    } catch (e) {
     }
+
+    if (vsDetected) {
+        console.log("[DeployKit] MSVC Build Tools already detected. Skipping.");
+        return;
+    }
+
+    var reply = QMessageBox.question(
+        "vsbuildtools.install",
+        "Install Visual Studio Build Tools?",
+        "MSVC compiler toolchain was not detected on this system.\n\n"
+        + "Playground uses it for real-time script compilation.\n"
+        + "Would you like to install it now? (requires internet, ~2-5 GB)",
+        QMessageBox.Yes | QMessageBox.No);
+
+    if (reply == QMessageBox.No) {
+        console.log("[DeployKit] User declined VS Build Tools installation.");
+        return;
+    }
+
+    component.addElevatedOperation("Execute",
+        "@TargetDir@/Resources/vs_BuildTools.exe",
+        "--passive", "--norestart", "--wait",
+        "UNDOEXECUTE=",
+        "workingdirectory=@TargetDir@/Resources",
+        "allowedexitcodes=0,3010",
+        "errormessage=Visual Studio Build Tools installation failed. You can install it manually later from @TargetDir@/Resources/vs_BuildTools.exe.");
 }
