@@ -6,9 +6,20 @@ QWidget {
     color: #16202b;
 }
 
-QWizard, QWizardPage, QDialog {
+QWizard {
+    background: transparent;
+    background-color: transparent;
+}
+
+QWizard > QWidget {
     background-color: #ffffff;
-    background: #ffffff;
+    border: 1px solid #d9e1ea;
+    border-radius: 12px;
+}
+
+QWizardPage, QDialog {
+    background-color: transparent;
+    background: transparent;
 }
 
 QLabel {
