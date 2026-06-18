@@ -1,5 +1,10 @@
 /* Qt Installer Framework custom stylesheet matching Playground app theme (00_base.qss) */
 
+QWidget {
+    background-color: #ffffff;
+    color: #16202b;
+}
+
 QWizard {
     background: #ffffff;
 }
