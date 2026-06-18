@@ -1,0 +1,8 @@
+function Controller() {
+    // Constructor
+}
+
+Controller.prototype.IntroductionPageCallback = function() {
+    // Forcefully disable/hide the Settings button on the introduction page
+    gui.setSettingsButtonEnabled(false);
+}

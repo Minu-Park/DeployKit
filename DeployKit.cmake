@@ -940,7 +940,6 @@ macro(deploykit_configure_bundling TARGET_NAME)
             # Layout and visual styles to hide classical sidebar and modernize layout
             set(CPACK_IFW_PACKAGE_WIZARD_STYLE "Modern")
             set(CPACK_IFW_PACKAGE_WIZARD_SHOW_PAGE_LIST "OFF") # Hides side page list panel for a cleaner flat design
-            set(CPACK_IFW_PACKAGE_WIZARD_SHOW_SETTINGS_BUTTON "OFF") # Hides the settings/repository dialog button completely
 
             # Visual logo branding
             set(deploykit_logo "${CMAKE_SOURCE_DIR}/modules/Resources/BASLER_Logo.png")
@@ -953,6 +952,15 @@ macro(deploykit_configure_bundling TARGET_NAME)
             if(EXISTS "${deploykit_qrc}")
                 set(CPACK_IFW_PACKAGE_RESOURCES "${deploykit_qrc}")
             endif()
+
+            # Generate controller.qs to handle dynamic UI behavior (like settings button hiding)
+            set(deploykit_control_script "${CMAKE_CURRENT_BINARY_DIR}/controller.qs")
+            configure_file(
+                "${DEPLOYKIT_MODULE_DIR}/controller.qs.in"
+                "${deploykit_control_script}"
+                @ONLY
+            )
+            set(CPACK_IFW_PACKAGE_CONTROL_SCRIPT "${deploykit_control_script}")
 
             # Resolve AppIcon path
             set(deploykit_icon_path "${CMAKE_SOURCE_DIR}/modules/Resources/AppIcons/AppIcon.ico")

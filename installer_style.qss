@@ -14,7 +14,7 @@ QWizard, QWizardPage, QDialog {
 QLabel {
     background-color: transparent;
     color: #16202b;
-    font-family: "Inter", "Segoe UI", Arial;
+    font-family: "Inter", "Malgun Gothic", "맑은 고딕", "Segoe UI", Arial;
     font-size: 12px;
 }
 
@@ -51,7 +51,7 @@ QTabBar::tab {
     border-top-right-radius: 6px;
     min-width: 80px;
     padding: 6px 12px;
-    font-family: "Inter", "Segoe UI", Arial;
+    font-family: "Inter", "Malgun Gothic", "맑은 고딕", "Segoe UI", Arial;
     font-size: 11px;
     font-weight: 700;
     color: #475569;
@@ -76,7 +76,7 @@ QPushButton {
     border: 1px solid #cfd9e4;
     background: #ffffff;
     color: #16202b;
-    font-family: "Inter", "Segoe UI", Arial;
+    font-family: "Inter", "Malgun Gothic", "맑은 고딕", "Segoe UI", Arial;
     font-size: 12px;
     font-weight: 700;
 }
@@ -102,7 +102,7 @@ QPushButton:disabled {
 QCheckBox, QRadioButton {
     background-color: transparent;
     color: #16202b;
-    font-family: "Inter", "Segoe UI", Arial;
+    font-family: "Inter", "Malgun Gothic", "맑은 고딕", "Segoe UI", Arial;
     font-size: 12px;
 }
 
@@ -114,7 +114,7 @@ QLineEdit, QComboBox {
     border: 1px solid #cfd9e4;
     background: #ffffff;
     color: #16202b;
-    font-family: "Inter", "Segoe UI", Arial;
+    font-family: "Inter", "Malgun Gothic", "맑은 고딕", "Segoe UI", Arial;
     font-size: 12px;
 }
 
