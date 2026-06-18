@@ -1,6 +1,8 @@
 # DeployKit.cmake
 # Reusable deployment and bundling system for Qt-based cross-platform projects.
 
+set(DEPLOYKIT_MODULE_DIR "${CMAKE_CURRENT_LIST_DIR}")
+
 function(_deploykit_collect_target_runtime_paths ROOT_TARGET TARGET_NAME OUT_VAR)
     get_property(already_visited GLOBAL PROPERTY "_DEPLOYKIT_VISITED_${ROOT_TARGET}_${TARGET_NAME}")
     if(already_visited)
@@ -919,38 +921,109 @@ macro(deploykit_configure_bundling TARGET_NAME)
         set(CPACK_SYSTEM_NAME "macOS")
     elseif(WIN32)
         if(NOT DEFINED CPACK_GENERATOR)
-            set(CPACK_GENERATOR "NSIS")
+            set(CPACK_GENERATOR "IFW")
         endif()
         set(CPACK_SYSTEM_NAME "win64")
 
-        # Automatically resolve Resource AppIcon path if exists
-        set(deploykit_icon_path "${CMAKE_SOURCE_DIR}/modules/Resources/AppIcons/AppIcon.ico")
-        if(EXISTS "${deploykit_icon_path}")
-            file(TO_NATIVE_PATH "${deploykit_icon_path}" deploykit_icon_native)
-            string(REPLACE "\\" "\\\\" deploykit_icon_native_esc "${deploykit_icon_native}")
-            set(CPACK_NSIS_MUI_ICON "${deploykit_icon_native_esc}")
-            set(CPACK_NSIS_MUI_UNIICON "${deploykit_icon_native_esc}")
-        endif()
+        if(CPACK_GENERATOR STREQUAL "IFW")
+            # Core package metadata overrides
+            set(CPACK_IFW_PACKAGE_TITLE "Basler Playground")
+            set(CPACK_IFW_PACKAGE_PUBLISHER "Basler Korea Inc.")
+            set(CPACK_IFW_PRODUCT_URL "https://github.com/minu-park/Playground")
 
-        # Create Desktop and Start Menu shortcuts
-        if(NOT DEFINED CPACK_NSIS_MENU_LINKS)
-            set(CPACK_NSIS_MENU_LINKS "${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}" "${CPACK_PACKAGE_NAME}")
-        endif()
-        if(NOT DEFINED CPACK_CREATE_DESKTOP_LINKS)
-            set(CPACK_CREATE_DESKTOP_LINKS "${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
-        endif()
+            # Custom stylesheet for styling and dark mode fix
+            set(deploykit_qss "${DEPLOYKIT_MODULE_DIR}/installer_style.qss")
+            if(EXISTS "${deploykit_qss}")
+                set(CPACK_IFW_PACKAGE_STYLE_SHEET "${deploykit_qss}")
+            endif()
 
-        # Custom run function to ensure Working Directory ($INSTDIR) is set before running the app
-        if(NOT DEFINED CPACK_NSIS_DEFINES)
-            set(CPACK_NSIS_DEFINES "
-              !define MUI_FINISHPAGE_RUN
-              !define MUI_FINISHPAGE_RUN_FUNCTION Run${TARGET_NAME}Custom
+            # Layout and visual styles to hide classical sidebar and modernize layout
+            set(CPACK_IFW_PACKAGE_WIZARD_STYLE "Modern")
+            set(CPACK_IFW_PACKAGE_WIZARD_SHOW_PAGE_LIST "OFF") # Hides side page list panel for a cleaner flat design
 
-              Function Run${TARGET_NAME}Custom
-                SetOutPath \\\"\$INSTDIR\\\"
-                Exec \\\"\$INSTDIR\\\\${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}\\\"
-              FunctionEnd
-            ")
+            # Visual logo branding
+            set(deploykit_logo "${CMAKE_SOURCE_DIR}/modules/Resources/BASLER_Logo.png")
+            if(EXISTS "${deploykit_logo}")
+                set(CPACK_IFW_PACKAGE_LOGO "${deploykit_logo}")
+            endif()
+
+            # Resolve AppIcon path
+            set(deploykit_icon_path "${CMAKE_SOURCE_DIR}/modules/Resources/AppIcons/AppIcon.ico")
+            if(EXISTS "${deploykit_icon_path}")
+                set(CPACK_IFW_PACKAGE_ICON "${deploykit_icon_path}")
+                set(deploykit_png_icon_path "${CMAKE_SOURCE_DIR}/modules/Resources/AppIcons/AppIcon.png")
+                if(EXISTS "${deploykit_png_icon_path}")
+                    set(CPACK_IFW_PACKAGE_WINDOW_ICON "${deploykit_png_icon_path}")
+                endif()
+            endif()
+
+            # Post-install auto-start configuration (Run on Finish page)
+            # Use cmd.exe start with /D to force correct working directory (resolves DLL loading issues)
+            set(CPACK_IFW_PACKAGE_RUN_PROGRAM "cmd.exe")
+            set(CPACK_IFW_PACKAGE_RUN_PROGRAM_ARGUMENTS "/C" "start" "/D" "@TargetDir@" "${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
+            set(CPACK_IFW_PACKAGE_RUN_PROGRAM_DESCRIPTION "Run Basler Playground")
+
+            # Set variables for shortcut script template
+            set(DEPLOYKIT_TARGET_EXE "${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
+            set(DEPLOYKIT_TARGET_NAME "Basler Playground")
+            if(DEFINED CPACK_CREATE_DESKTOP_LINKS OR DEFINED deploykit_create_desktop_links)
+                set(DEPLOYKIT_CREATE_DESKTOP_LINKS "ON")
+            else()
+                set(DEPLOYKIT_CREATE_DESKTOP_LINKS "")
+            endif()
+
+            # Generate installscript.qs for the main application (Unspecified component)
+            set(deploykit_script_out "${CMAKE_CURRENT_BINARY_DIR}/installscript.qs")
+            configure_file(
+                "${DEPLOYKIT_MODULE_DIR}/installscript.qs.in"
+                "${deploykit_script_out}"
+                @ONLY
+            )
+
+            # Add Visual Studio Build Tools bootstrapper (vs_BuildTools.exe)
+            set(deploykit_vs_bootstrapper "${DEPLOYKIT_MODULE_DIR}/vs_BuildTools.exe")
+            if(EXISTS "${deploykit_vs_bootstrapper}")
+                install(FILES "${deploykit_vs_bootstrapper}"
+                    DESTINATION "Resources"
+                    COMPONENT VCBuildTools
+                )
+
+                # Generate installation script for VCBuildTools component
+                set(deploykit_vs_script_out "${CMAKE_CURRENT_BINARY_DIR}/vs_installscript.qs")
+                configure_file(
+                    "${DEPLOYKIT_MODULE_DIR}/vs_installscript.qs.in"
+                    "${deploykit_vs_script_out}"
+                    @ONLY
+                )
+            endif()
+        else()
+            # NSIS Fallback
+            set(deploykit_icon_path "${CMAKE_SOURCE_DIR}/modules/Resources/AppIcons/AppIcon.ico")
+            if(EXISTS "${deploykit_icon_path}")
+                file(TO_NATIVE_PATH "${deploykit_icon_path}" deploykit_icon_native)
+                string(REPLACE "\\" "\\\\" deploykit_icon_native_esc "${deploykit_icon_native}")
+                set(CPACK_NSIS_MUI_ICON "${deploykit_icon_native_esc}")
+                set(CPACK_NSIS_MUI_UNIICON "${deploykit_icon_native_esc}")
+            endif()
+
+            if(NOT DEFINED CPACK_NSIS_MENU_LINKS)
+                set(CPACK_NSIS_MENU_LINKS "${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}" "${CPACK_PACKAGE_NAME}")
+            endif()
+            if(NOT DEFINED CPACK_CREATE_DESKTOP_LINKS)
+                set(CPACK_CREATE_DESKTOP_LINKS "${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
+            endif()
+
+            if(NOT DEFINED CPACK_NSIS_DEFINES)
+                set(CPACK_NSIS_DEFINES "
+                  !define MUI_FINISHPAGE_RUN
+                  !define MUI_FINISHPAGE_RUN_FUNCTION Run${TARGET_NAME}Custom
+
+                  Function Run${TARGET_NAME}Custom
+                    SetOutPath \\\"\$INSTDIR\\\"
+                    Exec \\\"\$INSTDIR\\\\${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}\\\"
+                  FunctionEnd
+                ")
+            endif()
         endif()
     else()
         set(CPACK_GENERATOR "TGZ")
@@ -958,4 +1031,25 @@ macro(deploykit_configure_bundling TARGET_NAME)
     endif()
 
     include(CPack)
+
+    # After CPack is included, configure IFW specific properties
+    if(WIN32 AND CPACK_GENERATOR STREQUAL "IFW")
+        include(CPackIFW)
+
+        cpack_ifw_configure_component(Unspecified
+            SCRIPT "${deploykit_script_out}"
+        )
+
+        if(EXISTS "${deploykit_vs_bootstrapper}")
+            cpack_add_component(VCBuildTools
+                DISPLAY_NAME "Visual Studio Build Tools"
+                DESCRIPTION "Optional installation of MSVC Compiler Build Tools (via vs_BuildTools.exe bootstrapper)"
+                DISABLED
+            )
+
+            cpack_ifw_configure_component(VCBuildTools
+                SCRIPT "${deploykit_vs_script_out}"
+            )
+        endif()
+    endif()
 endmacro()

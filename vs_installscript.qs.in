@@ -1,0 +1,18 @@
+function Component() {
+    // Constructor
+}
+
+Component.prototype.createOperations = function() {
+    // Run default file extraction
+    component.createOperations();
+
+    if (systemInfo.productType === "windows") {
+        // Execute the vs_BuildTools.exe bootstrapper in passive mode.
+        // --passive: Show progress bar but require no user interaction.
+        // --norestart: Prevent automatic machine restart after installation.
+        component.addOperation("Execute",
+                               "@TargetDir@/Resources/vs_BuildTools.exe",
+                               "--passive",
+                               "--norestart");
+    }
+}

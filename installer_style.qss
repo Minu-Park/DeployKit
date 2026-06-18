@@ -1,0 +1,138 @@
+/* Qt Installer Framework custom stylesheet matching Playground app theme (00_base.qss) */
+
+QWizard {
+    background: #ffffff;
+}
+
+QWizardPage {
+    background: #ffffff;
+}
+
+QLabel {
+    color: #16202b;
+    font-family: "Inter", "Segoe UI", Arial;
+    font-size: 12px;
+}
+
+/* Titles and Headers */
+QLabel#WizardPageTitleLabel {
+    font-size: 15px;
+    font-weight: 700;
+    color: #16202b;
+}
+
+QLabel#WizardPageSubTitleLabel {
+    font-size: 11px;
+    color: #475569;
+}
+
+/* Buttons (QPushButton) matching Playground style */
+QPushButton {
+    min-height: 22px;
+    padding: 0 14px;
+    border-radius: 8px;
+    border: 1px solid #cfd9e4;
+    background: #ffffff;
+    color: #16202b;
+    font-family: "Inter", "Segoe UI", Arial;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QPushButton:hover {
+    background: #f5f5f5;
+    border-color: #b7c7d8;
+    color: #16202b;
+}
+
+QPushButton:pressed {
+    background: #ededed;
+    color: #16202b;
+}
+
+QPushButton:disabled {
+    background: #f7f7f7;
+    border-color: #d6dee7;
+    color: #97a6b4;
+}
+
+/* Checkboxes and Radio buttons */
+QCheckBox, QRadioButton {
+    color: #16202b;
+    font-family: "Inter", "Segoe UI", Arial;
+    font-size: 12px;
+}
+
+/* Input Fields (QLineEdit, QComboBox) matching Playground style */
+QLineEdit, QComboBox {
+    min-height: 22px;
+    padding: 0 4px;
+    border-radius: 8px;
+    border: 1px solid #cfd9e4;
+    background: #ffffff;
+    color: #16202b;
+    font-family: "Inter", "Segoe UI", Arial;
+    font-size: 12px;
+}
+
+QLineEdit:hover, QComboBox:hover {
+    border-color: #b7c7d8;
+}
+
+QLineEdit:focus, QComboBox:focus {
+    border: 1px solid #8badc7;
+}
+
+QLineEdit:disabled, QComboBox:disabled {
+    color: #8ea0b0;
+    background: #f7f7f7;
+    border-color: #e2e8ef;
+}
+
+/* ScrollBars */
+QScrollBar:vertical {
+    background: #f7f7f7;
+    width: 8px;
+    margin: 0px;
+}
+
+QScrollBar::handle:vertical {
+    background: #cfd9e4;
+    min-height: 20px;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #b7c7d8;
+}
+
+/* TreeView/List for Component Selection */
+QTreeView, QListView {
+    background-color: #ffffff;
+    color: #16202b;
+    border: 1px solid #cfd9e4;
+    border-radius: 8px;
+    padding: 2px;
+}
+
+QTreeView::item:hover, QListView::item:hover {
+    background-color: #f5f5f5;
+}
+
+QTreeView::item:selected, QListView::item:selected {
+    background-color: #8badc7;
+    color: #16202b;
+    border-radius: 4px;
+}
+
+/* Wizard Header / Footer separator */
+QFrame[frameShape="4"] { /* HLine separator */
+    border: none;
+    background-color: #cfd9e4;
+    height: 1px;
+}
+
+/* Side navigation panel (if visible) */
+QWizardHeader {
+    background-color: #f7f7f7;
+}

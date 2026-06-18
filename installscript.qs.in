@@ -1,0 +1,37 @@
+function Component() {
+    // Constructor
+}
+
+Component.prototype.createOperations = function() {
+    // Call default implementation to extract files first
+    component.createOperations();
+
+    if (systemInfo.productType === "windows") {
+        // Start Menu Shortcut
+        component.addOperation("CreateShortcut",
+                               "@TargetDir@/@DEPLOYKIT_TARGET_EXE@",
+                               "@StartMenuDir@/@DEPLOYKIT_TARGET_NAME@.lnk",
+                               "workingDirectory=@TargetDir@",
+                               "iconPath=@TargetDir@/@DEPLOYKIT_TARGET_EXE@");
+
+        // Desktop Shortcut
+        if ("@DEPLOYKIT_CREATE_DESKTOP_LINKS@" !== "") {
+            component.addOperation("CreateShortcut",
+                                   "@TargetDir@/@DEPLOYKIT_TARGET_EXE@",
+                                   "@DesktopDir@/@DEPLOYKIT_TARGET_NAME@.lnk",
+                                   "workingDirectory=@TargetDir@",
+                                   "iconPath=@TargetDir@/@DEPLOYKIT_TARGET_EXE@");
+        }
+    }
+}
+
+Component.prototype.createOperationsForUninstallation = function() {
+    // Run default uninstallation operations
+    component.createOperationsForUninstallation();
+
+    if (systemInfo.productType === "windows") {
+        // Clean up user-generated files on uninstall so the target directory can be fully removed
+        component.addElevatedOperation("Delete", "@TargetDir@/Playground.ini");
+        component.addElevatedOperation("Delete", "@TargetDir@/lastlog.log");
+    }
+}
