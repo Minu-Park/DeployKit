@@ -947,6 +947,12 @@ macro(deploykit_configure_bundling TARGET_NAME)
                 set(CPACK_IFW_PACKAGE_LOGO "${deploykit_logo}")
             endif()
 
+            # Register extra Qt resources (QRC) containing brand fonts and icons
+            set(deploykit_qrc "${CMAKE_SOURCE_DIR}/modules/Resources/Resources.qrc")
+            if(EXISTS "${deploykit_qrc}")
+                set(CPACK_IFW_PACKAGE_RESOURCES "${deploykit_qrc}")
+            endif()
+
             # Resolve AppIcon path
             set(deploykit_icon_path "${CMAKE_SOURCE_DIR}/modules/Resources/AppIcons/AppIcon.ico")
             if(EXISTS "${deploykit_icon_path}")
