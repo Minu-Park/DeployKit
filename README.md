@@ -20,7 +20,7 @@ deploykit_configure_bundling(MyApp
 
 `deploykit_configure_bundling(<target>)` installs the target after each target build and creates a `Bundle<target>` custom target for manual re-bundling. The default output is `${CMAKE_SOURCE_DIR}/build/bundle` on macOS and `${CMAKE_BINARY_DIR}/bundle` on Linux and Windows.
 
-By default, DeployKit preserves an existing bundle directory so unchanged files can remain in place across incremental installs. Configure with `-DDEPLOYKIT_CLEAN_BUNDLE=ON` when a clean bundle directory is required before install.
+By default, DeployKit preserves an existing bundle directory so unchanged files can remain in place across incremental installs. Configure with `-DDEPLOYKIT_CLEAN_BUNDLE=ON` when a clean bundle directory is required before install. On macOS, clean bundle removal clears extended attributes first so Finder-created metadata does not block stale bundle deletion.
 
 ## Arguments
 
@@ -32,7 +32,7 @@ By default, DeployKit preserves an existing bundle directory so unchanged files 
 
 ## Platform Behavior
 
-- macOS: installs an app bundle, runs `macdeployqt` when available, copies extra libraries into `Contents/Frameworks`, and runs recursive dependency scanning.
+- macOS: installs an app bundle, runs `macdeployqt` when available, copies extra libraries into `Contents/Frameworks`, runs recursive dependency scanning, and stages DragNDrop DMGs with only the `.app` at the image root.
 - Windows: installs each configuration under its own bundle subdirectory, copies extra libraries next to the executable, runs `windeployqt` when available, and recursively copies non-system runtime dependencies. Debug bundles skip release-only VTK Qt runtimes.
 - All platforms place generated bundle contents below a configuration subdirectory such as `Debug` or `Release` to avoid runtime mixing when one build tree produces multiple configurations.
 - Linux: installs the executable, copies selected Qt plugin directories into `plugins` including Wayland client graphics integrations, writes `qt.conf`, installs extra libraries under `lib`, runs recursive dependency scanning, and rewrites bundled ELF RPATH/RUNPATH entries with `patchelf`.
