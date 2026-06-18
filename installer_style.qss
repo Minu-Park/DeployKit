@@ -179,3 +179,15 @@ QFrame[frameShape="4"] { /* HLine separator */
 QWizardHeader {
     background-color: #f7f7f7;
 }
+
+/* Ensure SettingsButton is hidden completely if present */
+QPushButton#SettingsButton, QPushButton#settingsButton {
+    max-width: 0px;
+    min-width: 0px;
+    max-height: 0px;
+    min-height: 0px;
+    padding: 0px;
+    margin: 0px;
+    border: none;
+    qproperty-visible: false;
+}

@@ -5,4 +5,17 @@ function Controller() {
 Controller.prototype.IntroductionPageCallback = function() {
     // Forcefully disable/hide the Settings button on the introduction page
     gui.setSettingsButtonEnabled(false);
+    
+    // Hide the Settings button completely if found in the wizard
+    var wizard = gui.wizard();
+    if (wizard) {
+        var settingsButton = wizard.findChild("SettingsButton");
+        if (settingsButton) {
+            settingsButton.visible = false;
+        }
+        var settingsButtonLower = wizard.findChild("settingsButton");
+        if (settingsButtonLower) {
+            settingsButtonLower.visible = false;
+        }
+    }
 }
