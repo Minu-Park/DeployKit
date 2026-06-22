@@ -1172,11 +1172,6 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
     if(WIN32 AND (NOT DEFINED CPACK_GENERATOR OR CPACK_GENERATOR STREQUAL "IFW"))
         include(CPackComponent)
         include(CPackIFW)
-        cpack_ifw_add_repository(PlaygroundUpdateRepo
-            URL "https://github.com/minu-park/basler-playground/releases/latest/download/"
-            DISPLAY_NAME "Basler Playground Update Repository"
-            ENABLED 1
-        )
         set(CPACK_COMPONENTS_GROUPING IGNORE)
 
         if(EXISTS "${deploykit_vs_bootstrapper}")
