@@ -24,24 +24,3 @@ Component.prototype.createOperations = function() {
         }
     }
 }
-
-Component.prototype.createOperationsForUninstallation = function() {
-    // Run default uninstallation operations
-    component.createOperationsForUninstallation();
-
-    // Component uninstall operations also run while an updater replaces an old
-    // package. Target-directory cleanup is valid only for a real uninstall.
-    if (systemInfo.productType === "windows" && installer.isUninstaller()) {
-        // Clean up user-generated files on uninstall so the target directory can be fully removed
-        component.addElevatedOperation("Delete", "@DEPLOYKIT_IFW_TARGET_DIR@/Playground.ini");
-        component.addElevatedOperation("Delete", "@DEPLOYKIT_IFW_TARGET_DIR@/lastlog.log");
-
-        // Schedule a background PowerShell process to recursively force-delete the target directory 2 seconds after uninstaller exits (avoids Win file-locks)
-        var targetDirNative = "@DEPLOYKIT_IFW_TARGET_DIR@".replace(/\//g, "\\");
-        component.addElevatedOperation("Execute",
-            "cmd.exe",
-            "/c", "start", "/b", "powershell.exe", "-NoProfile", "-Command",
-            "Start-Sleep -Seconds 2; Remove-Item -Recurse -Force '" + targetDirNative + "'",
-            "UNDOEXECUTE=");
-    }
-}
