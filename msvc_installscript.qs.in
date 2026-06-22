@@ -1,0 +1,37 @@
+function hasMsvcBuildTools() {
+    var vswhere = "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe";
+    if (!installer.fileExists(vswhere))
+        return false;
+
+    try {
+        var result = installer.execute(vswhere,
+            ["-latest", "-products", "*", "-requires",
+             "@DEPLOYKIT_MSVC_COMPONENT_ID@", "-property", "installationPath"]);
+        return result && result.length >= 2 && result[1] == 0 && result[0].trim() !== "";
+    } catch (e) {
+        return false;
+    }
+}
+
+function Component() {
+    var installed = hasMsvcBuildTools();
+    component.setValue("Default", "true");
+    component.enabled = !installed;
+    if (installed)
+        component.setValue("Description", "Already installed; no action is required");
+}
+
+Component.prototype.createOperations = function() {
+    component.createOperations();
+    if (hasMsvcBuildTools())
+        return;
+
+    component.addElevatedOperation("Execute",
+        "@DEPLOYKIT_IFW_TARGET_DIR@/vs_BuildTools.exe",
+        "--passive", "--norestart", "--wait", "--nocache",
+        "--add", "@DEPLOYKIT_MSVC_COMPONENT_ID@",
+        "UNDOEXECUTE=",
+        "workingdirectory=@DEPLOYKIT_IFW_TARGET_DIR@",
+        "allowedexitcodes=0,3010",
+        "errormessage=MSVC C++ Build Tools installation failed. You can rerun vs_BuildTools.exe manually.");
+}

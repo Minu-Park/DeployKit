@@ -1,0 +1,52 @@
+function hasWindowsSdk() {
+    var sdkRoots = [
+        "C:\\Program Files (x86)\\Windows Kits\\10",
+        "C:\\Program Files\\Windows Kits\\10"
+    ];
+    for (var i = 0; i < sdkRoots.length; ++i) {
+        if (!installer.fileExists(sdkRoots[i]))
+            continue;
+
+        var windowsHeaders = QDesktopServices.findFiles(sdkRoots[i] + "\\Include", "Windows.h");
+        var ucrtHeaders = QDesktopServices.findFiles(sdkRoots[i] + "\\Include", "stdio.h");
+        var kernelLibraries = QDesktopServices.findFiles(sdkRoots[i] + "\\Lib", "kernel32.lib");
+        if (windowsHeaders.length > 0 && ucrtHeaders.length > 0 && kernelLibraries.length > 0)
+            return true;
+    }
+
+    var vswhere = "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe";
+    if (!installer.fileExists(vswhere))
+        return false;
+
+    try {
+        var result = installer.execute(vswhere,
+            ["-latest", "-products", "*", "-requires",
+             "@DEPLOYKIT_WINDOWS_SDK_COMPONENT_ID@", "-property", "installationPath"]);
+        return result && result.length >= 2 && result[1] == 0 && result[0].trim() !== "";
+    } catch (e) {
+        return false;
+    }
+}
+
+function Component() {
+    var installed = hasWindowsSdk();
+    component.setValue("Default", "true");
+    component.enabled = !installed;
+    if (installed)
+        component.setValue("Description", "Already installed; no action is required");
+}
+
+Component.prototype.createOperations = function() {
+    component.createOperations();
+    if (hasWindowsSdk())
+        return;
+
+    component.addElevatedOperation("Execute",
+        "@DEPLOYKIT_IFW_TARGET_DIR@/vs_BuildTools.exe",
+        "--passive", "--norestart", "--wait", "--nocache",
+        "--add", "@DEPLOYKIT_WINDOWS_SDK_COMPONENT_ID@",
+        "UNDOEXECUTE=",
+        "workingdirectory=@DEPLOYKIT_IFW_TARGET_DIR@",
+        "allowedexitcodes=0,3010",
+        "errormessage=Windows SDK installation failed. You can rerun vs_BuildTools.exe manually.");
+}

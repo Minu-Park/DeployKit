@@ -48,7 +48,13 @@ macro(deploykit_configure_bundling TARGET_NAME)
 
     # Parse arguments
     set(options)
-    set(oneValueArgs MACOSX_ICON DESTINATION)
+    set(oneValueArgs
+        MACOSX_ICON
+        DESTINATION
+        VS_BUILD_TOOLS_BOOTSTRAPPER
+        VS_BUILD_TOOLS_MSVC_COMPONENT
+        VS_BUILD_TOOLS_SDK_COMPONENT
+    )
     set(multiValueArgs EXTRA_LIBS EXTRA_FILES LIBPATHS ANALYZE_BINARIES)
     cmake_parse_arguments(DEPLOY "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
@@ -410,6 +416,19 @@ macro(deploykit_configure_bundling TARGET_NAME)
             message(STATUS "[DeployKit] Found windeployqt: ${WINDEPLOYQT_PATH}")
         endif()
 
+        find_program(VSWHERE_PATH vswhere
+            HINTS "C:/Program Files (x86)/Microsoft Visual Studio/Installer"
+                  "C:/Program Files/Microsoft Visual Studio/Installer"
+                  "$ENV{ProgramFiles\(x86\)}/Microsoft Visual Studio/Installer"
+                  "$ENV{ProgramFiles}/Microsoft Visual Studio/Installer"
+            DOC "Path to vswhere tool"
+        )
+        if(VSWHERE_PATH)
+            message(STATUS "[DeployKit] Found vswhere: ${VSWHERE_PATH}")
+        else()
+            message(WARNING "[DeployKit] vswhere not found! Visual Studio path auto-detection might fail.")
+        endif()
+
         # Install target
         install(TARGETS ${TARGET_NAME}
             RUNTIME DESTINATION ${deploykit_bundle_destination}
@@ -464,6 +483,19 @@ macro(deploykit_configure_bundling TARGET_NAME)
         # Execute windeployqt as a post-install step
         if(WINDEPLOYQT_PATH)
             install(CODE "
+                if(NOT DEFINED ENV{VCINSTALLDIR} AND \"${VSWHERE_PATH}\")
+                    execute_process(
+                        COMMAND \"${VSWHERE_PATH}\" -latest -products * -property installationPath
+                        OUTPUT_VARIABLE vs_install_path
+                        OUTPUT_STRIP_TRAILING_WHITESPACE
+                    )
+                    if(vs_install_path)
+                        string(REPLACE \"/\" \"\\\\\" native_vc_dir \"\${vs_install_path}/VC/\")
+                        set(ENV{VCINSTALLDIR} \"\${native_vc_dir}\")
+                        message(STATUS \"[DeployKit] Auto-detected VCINSTALLDIR: \$ENV{VCINSTALLDIR}\")
+                    endif()
+                endif()
+
                 get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
                 set(dest_sub \"${install_time_dest}\")
                 if(dest_sub STREQUAL \"\" OR dest_sub STREQUAL \".\")
@@ -969,6 +1001,11 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
         set(CPACK_SYSTEM_NAME "win64")
 
         if(CPACK_GENERATOR STREQUAL "IFW")
+            # Enable CMake project install components instead of monolithic directory install
+            set(CPACK_INSTALL_CMAKE_PROJECTS "${CMAKE_BINARY_DIR};${TARGET_NAME};ALL;/")
+            unset(CPACK_INSTALLED_DIRECTORIES CACHE)
+            unset(CPACK_INSTALLED_DIRECTORIES)
+
             # Core package metadata overrides
             set(CPACK_IFW_PACKAGE_TITLE "Basler Playground")
             set(CPACK_IFW_PACKAGE_PUBLISHER "Basler Korea Inc.")
@@ -983,7 +1020,6 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
             # Layout and visual styles to hide classical sidebar and modernize layout
             set(CPACK_IFW_PACKAGE_WIZARD_STYLE "Modern")
             set(CPACK_IFW_PACKAGE_WIZARD_SHOW_PAGE_LIST "OFF")
-            set(CPACK_IFW_PACKAGE_TRANSLATIONS "en")
 
             # Visual logo branding (scaled for installer header)
             set(deploykit_logo "${DEPLOYKIT_MODULE_DIR}/installer_logo.png")
@@ -1025,13 +1061,17 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
             # Set variables for shortcut script template
             set(DEPLOYKIT_TARGET_EXE "${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
             set(DEPLOYKIT_TARGET_NAME "Basler Playground")
+            # Preserve QtIFW runtime placeholders through configure_file(@ONLY).
+            set(DEPLOYKIT_IFW_TARGET_DIR "@TargetDir@")
+            set(DEPLOYKIT_IFW_START_MENU_DIR "@StartMenuDir@")
+            set(DEPLOYKIT_IFW_DESKTOP_DIR "@DesktopDir@")
             if(DEFINED CPACK_CREATE_DESKTOP_LINKS OR DEFINED deploykit_create_desktop_links)
                 set(DEPLOYKIT_CREATE_DESKTOP_LINKS "ON")
             else()
                 set(DEPLOYKIT_CREATE_DESKTOP_LINKS "")
             endif()
 
-            # Generate installscript.qs for the main application (Unspecified component)
+            # Generate installscript.qs for the main application component.
             set(deploykit_script_out "${CMAKE_CURRENT_BINARY_DIR}/installscript.qs")
             configure_file(
                 "${DEPLOYKIT_MODULE_DIR}/installscript.qs.in"
@@ -1039,20 +1079,57 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
                 @ONLY
             )
 
-            # Add Visual Studio Build Tools bootstrapper (vs_BuildTools.exe)
-            set(deploykit_vs_bootstrapper "${DEPLOYKIT_MODULE_DIR}/vs_BuildTools.exe")
+            # Package the already-validated bundle as an explicit component. CPack's
+            # reserved Unspecified component is always hidden by CMake.
+            install(CODE "
+                if(CMAKE_INSTALL_COMPONENT STREQUAL \"Playground\")
+                    set(deploykit_bundle_source \"${CMAKE_BINARY_DIR}/bundle/\${CMAKE_INSTALL_CONFIG_NAME}\")
+                    if(NOT EXISTS \"\${deploykit_bundle_source}/${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}\")
+                        message(FATAL_ERROR \"[DeployKit] Bundle is missing: \${deploykit_bundle_source}\")
+                    endif()
+                    file(COPY \"\${deploykit_bundle_source}/\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}\")
+                endif()
+            " COMPONENT Playground)
+
+            # Generate separate prerequisite scripts when the Build Tools bootstrapper is available.
+            set(deploykit_vs_bootstrapper "${DEPLOY_VS_BUILD_TOOLS_BOOTSTRAPPER}")
             if(EXISTS "${deploykit_vs_bootstrapper}")
+                set(DEPLOYKIT_MSVC_COMPONENT_ID "${DEPLOY_VS_BUILD_TOOLS_MSVC_COMPONENT}")
+                set(DEPLOYKIT_WINDOWS_SDK_COMPONENT_ID "${DEPLOY_VS_BUILD_TOOLS_SDK_COMPONENT}")
+
                 install(FILES "${deploykit_vs_bootstrapper}"
-                    DESTINATION "Resources"
-                    COMPONENT VCBuildTools
+                    DESTINATION ${deploykit_bundle_destination}
+                    COMPONENT Unspecified
                 )
 
-                # Generate installation script for VCBuildTools component
-                set(deploykit_vs_script_out "${CMAKE_CURRENT_BINARY_DIR}/vs_installscript.qs")
+                set(deploykit_msvc_script_out "${CMAKE_CURRENT_BINARY_DIR}/msvc_installscript.qs")
                 configure_file(
-                    "${DEPLOYKIT_MODULE_DIR}/vs_installscript.qs.in"
-                    "${deploykit_vs_script_out}"
+                    "${DEPLOYKIT_MODULE_DIR}/msvc_installscript.qs.in"
+                    "${deploykit_msvc_script_out}"
                     @ONLY
+                )
+
+                set(deploykit_windows_sdk_script_out "${CMAKE_CURRENT_BINARY_DIR}/windows_sdk_installscript.qs")
+                configure_file(
+                    "${DEPLOYKIT_MODULE_DIR}/windows_sdk_installscript.qs.in"
+                    "${deploykit_windows_sdk_script_out}"
+                    @ONLY
+                )
+
+                # CPack omits components with no payload, so give each script-only
+                # prerequisite a tiny owned marker file. The bootstrapper itself is
+                # already part of the required Playground bundle.
+                set(deploykit_msvc_marker "${CMAKE_CURRENT_BINARY_DIR}/msvc-build-tools.component")
+                set(deploykit_windows_sdk_marker "${CMAKE_CURRENT_BINARY_DIR}/windows-sdk.component")
+                file(WRITE "${deploykit_msvc_marker}" "MSVC C++ Build Tools prerequisite\n")
+                file(WRITE "${deploykit_windows_sdk_marker}" "Windows SDK prerequisite\n")
+                install(FILES "${deploykit_msvc_marker}"
+                    DESTINATION "Resources/Installer"
+                    COMPONENT MSVCBuildTools
+                )
+                install(FILES "${deploykit_windows_sdk_marker}"
+                    DESTINATION "Resources/Installer"
+                    COMPONENT WindowsSDK
                 )
             endif()
         else()
@@ -1089,25 +1166,62 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
         set(CPACK_SYSTEM_NAME "linux")
     endif()
 
-    include(CPack)
 
-    # After CPack is included, configure IFW specific properties
-    if(WIN32 AND CPACK_GENERATOR STREQUAL "IFW")
+    # Define and configure components before including CPack so their metadata is
+    # serialized into CPackConfig.cmake.
+    if(WIN32 AND (NOT DEFINED CPACK_GENERATOR OR CPACK_GENERATOR STREQUAL "IFW"))
+        include(CPackComponent)
         include(CPackIFW)
+        set(CPACK_COMPONENTS_GROUPING IGNORE)
 
-        cpack_ifw_configure_component(Unspecified
+        if(EXISTS "${deploykit_vs_bootstrapper}")
+            set(CPACK_COMPONENTS_ALL Playground MSVCBuildTools WindowsSDK)
+        else()
+            set(CPACK_COMPONENTS_ALL Playground)
+        endif()
+
+        cpack_add_component(Playground
+            DISPLAY_NAME "Basler Playground"
+            DESCRIPTION "Basler Playground main application and dependencies"
+            REQUIRED
+        )
+        cpack_ifw_configure_component(Playground
             SCRIPT "${deploykit_script_out}"
+            FORCED_INSTALLATION
+            SORTING_PRIORITY 100
         )
 
         if(EXISTS "${deploykit_vs_bootstrapper}")
-            cpack_add_component(VCBuildTools
-                DISPLAY_NAME "Visual Studio Build Tools"
-                DESCRIPTION "MSVC compiler toolchain required for real-time script compilation"
+            cpack_add_component_group(DevelopmentPrerequisites
+                DISPLAY_NAME "Development prerequisites"
+                DESCRIPTION "Optional compiler components used by real-time script compilation"
+                EXPANDED
+            )
+            cpack_ifw_configure_component_group(DevelopmentPrerequisites
+                SORTING_PRIORITY 50
             )
 
-            cpack_ifw_configure_component(VCBuildTools
-                SCRIPT "${deploykit_vs_script_out}"
+            cpack_add_component(MSVCBuildTools
+                DISPLAY_NAME "MSVC C++ Build Tools"
+                DESCRIPTION "Microsoft C++ x64/x86 compiler and toolchain"
+                GROUP DevelopmentPrerequisites
+            )
+            cpack_ifw_configure_component(MSVCBuildTools
+                SCRIPT "${deploykit_msvc_script_out}"
+                SORTING_PRIORITY 40
+            )
+
+            cpack_add_component(WindowsSDK
+                DISPLAY_NAME "Windows SDK"
+                DESCRIPTION "Windows headers and x64 libraries required for compilation"
+                GROUP DevelopmentPrerequisites
+            )
+            cpack_ifw_configure_component(WindowsSDK
+                SCRIPT "${deploykit_windows_sdk_script_out}"
+                SORTING_PRIORITY 30
             )
         endif()
     endif()
+
+    include(CPack)
 endmacro()

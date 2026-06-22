@@ -9,18 +9,18 @@ Component.prototype.createOperations = function() {
     if (systemInfo.productType === "windows") {
         // Start Menu Shortcut
         component.addOperation("CreateShortcut",
-                               "@TargetDir@/@DEPLOYKIT_TARGET_EXE@",
-                               "@StartMenuDir@/@DEPLOYKIT_TARGET_NAME@.lnk",
-                               "workingDirectory=@TargetDir@",
-                               "iconPath=@TargetDir@/@DEPLOYKIT_TARGET_EXE@");
+                               "@DEPLOYKIT_IFW_TARGET_DIR@/@DEPLOYKIT_TARGET_EXE@",
+                               "@DEPLOYKIT_IFW_START_MENU_DIR@/@DEPLOYKIT_TARGET_NAME@.lnk",
+                               "workingDirectory=@DEPLOYKIT_IFW_TARGET_DIR@",
+                               "iconPath=@DEPLOYKIT_IFW_TARGET_DIR@/@DEPLOYKIT_TARGET_EXE@");
 
         // Desktop Shortcut
         if ("@DEPLOYKIT_CREATE_DESKTOP_LINKS@" !== "") {
             component.addOperation("CreateShortcut",
-                                   "@TargetDir@/@DEPLOYKIT_TARGET_EXE@",
-                                   "@DesktopDir@/@DEPLOYKIT_TARGET_NAME@.lnk",
-                                   "workingDirectory=@TargetDir@",
-                                   "iconPath=@TargetDir@/@DEPLOYKIT_TARGET_EXE@");
+                                   "@DEPLOYKIT_IFW_TARGET_DIR@/@DEPLOYKIT_TARGET_EXE@",
+                                   "@DEPLOYKIT_IFW_DESKTOP_DIR@/@DEPLOYKIT_TARGET_NAME@.lnk",
+                                   "workingDirectory=@DEPLOYKIT_IFW_TARGET_DIR@",
+                                   "iconPath=@DEPLOYKIT_IFW_TARGET_DIR@/@DEPLOYKIT_TARGET_EXE@");
         }
     }
 }
@@ -31,7 +31,15 @@ Component.prototype.createOperationsForUninstallation = function() {
 
     if (systemInfo.productType === "windows") {
         // Clean up user-generated files on uninstall so the target directory can be fully removed
-        component.addElevatedOperation("Delete", "@TargetDir@/Playground.ini");
-        component.addElevatedOperation("Delete", "@TargetDir@/lastlog.log");
+        component.addElevatedOperation("Delete", "@DEPLOYKIT_IFW_TARGET_DIR@/Playground.ini");
+        component.addElevatedOperation("Delete", "@DEPLOYKIT_IFW_TARGET_DIR@/lastlog.log");
+
+        // Schedule a background PowerShell process to recursively force-delete the target directory 2 seconds after uninstaller exits (avoids Win file-locks)
+        var targetDirNative = "@DEPLOYKIT_IFW_TARGET_DIR@".replace(/\//g, "\\");
+        component.addElevatedOperation("Execute",
+            "cmd.exe",
+            "/c", "start", "/b", "powershell.exe", "-NoProfile", "-Command",
+            "Start-Sleep -Seconds 2; Remove-Item -Recurse -Force '" + targetDirNative + "'",
+            "UNDOEXECUTE=");
     }
 }
