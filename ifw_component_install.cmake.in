@@ -1,0 +1,136 @@
+if(CMAKE_INSTALL_COMPONENT STREQUAL "")
+    return()
+endif()
+
+include("@DEPLOY_IFW_COMPONENT_MANIFEST@")
+
+list(FIND DEPLOYKIT_IFW_COMPONENTS "${CMAKE_INSTALL_COMPONENT}" active_component_index)
+if(active_component_index EQUAL -1)
+    return()
+endif()
+
+set(bundle_source "@CMAKE_BINARY_DIR@/bundle/${CMAKE_INSTALL_CONFIG_NAME}")
+if(NOT EXISTS "${bundle_source}/@deploykit_target_output_name@@CMAKE_EXECUTABLE_SUFFIX@")
+    message(FATAL_ERROR "[DeployKit] Bundle is missing: ${bundle_source}")
+endif()
+
+file(GLOB_RECURSE bundle_files
+    LIST_DIRECTORIES FALSE
+    RELATIVE "${bundle_source}"
+    "${bundle_source}/*"
+)
+
+set(owned_files "")
+foreach(relative_file IN LISTS bundle_files)
+    file(TO_CMAKE_PATH "${relative_file}" relative_file)
+    set(owner "")
+
+    foreach(component IN LISTS DEPLOYKIT_IFW_COMPONENTS)
+        set(patterns_var "DEPLOYKIT_IFW_COMPONENT_${component}_PATTERNS")
+        foreach(pattern IN LISTS ${patterns_var})
+            if(relative_file MATCHES "${pattern}")
+                if(owner AND NOT owner STREQUAL component)
+                    message(FATAL_ERROR
+                        "[DeployKit] IFW component patterns overlap for '${relative_file}': ${owner}, ${component}"
+                    )
+                endif()
+                set(owner "${component}")
+            endif()
+        endforeach()
+    endforeach()
+
+    if(NOT owner)
+        set(owner "${DEPLOYKIT_IFW_DEFAULT_COMPONENT}")
+    endif()
+
+    if(owner STREQUAL CMAKE_INSTALL_COMPONENT)
+        list(APPEND owned_files "${relative_file}")
+    endif()
+endforeach()
+
+list(SORT owned_files)
+set(cache_var "DEPLOYKIT_IFW_COMPONENT_${CMAKE_INSTALL_COMPONENT}_CACHE_ARCHIVE")
+if(${cache_var})
+    set(version_var "DEPLOYKIT_IFW_COMPONENT_${CMAKE_INSTALL_COMPONENT}_VERSION")
+    set(component_version "${${version_var}}")
+    if(NOT component_version)
+        message(FATAL_ERROR
+            "[DeployKit] Cached IFW component '${CMAKE_INSTALL_COMPONENT}' has no version."
+        )
+    endif()
+
+    set(content_manifest "")
+    foreach(relative_file IN LISTS owned_files)
+        file(SHA256 "${bundle_source}/${relative_file}" file_sha256)
+        file(SIZE "${bundle_source}/${relative_file}" file_size)
+        string(APPEND content_manifest "${relative_file}\t${file_size}\t${file_sha256}\n")
+    endforeach()
+    string(SHA256 content_sha256 "${content_manifest}")
+
+    set(cache_config "${CMAKE_INSTALL_CONFIG_NAME}")
+    if(NOT cache_config)
+        set(cache_config "Default")
+    endif()
+    set(version_cache_dir
+        "@CMAKE_BINARY_DIR@/ifw-archive-cache/${cache_config}/${CMAKE_INSTALL_COMPONENT}/${component_version}"
+    )
+    set(version_hash_file "${version_cache_dir}/content.sha256")
+    if(EXISTS "${version_hash_file}")
+        file(READ "${version_hash_file}" cached_content_sha256)
+        string(STRIP "${cached_content_sha256}" cached_content_sha256)
+        if(NOT cached_content_sha256 STREQUAL content_sha256)
+            message(FATAL_ERROR
+                "[DeployKit] IFW component '${CMAKE_INSTALL_COMPONENT}' payload changed without a version bump (${component_version})."
+            )
+        endif()
+    else()
+        file(MAKE_DIRECTORY "${version_cache_dir}")
+        file(WRITE "${version_hash_file}" "${content_sha256}\n")
+    endif()
+
+    set(archive_dir "${version_cache_dir}/${content_sha256}")
+    set(archive_path "${archive_dir}/${CMAKE_INSTALL_COMPONENT}.7z")
+    if(NOT EXISTS "${archive_path}")
+        file(MAKE_DIRECTORY "${archive_dir}")
+        message(STATUS
+            "[DeployKit] Compressing IFW component ${CMAKE_INSTALL_COMPONENT} ${component_version}..."
+        )
+        execute_process(
+            COMMAND "@deploykit_ifw_archivegen@" -f 7z -c 5
+                "${archive_path}" ${owned_files}
+            WORKING_DIRECTORY "${bundle_source}"
+            RESULT_VARIABLE archive_result
+            OUTPUT_VARIABLE archive_output
+            ERROR_VARIABLE archive_error
+        )
+        if(NOT archive_result EQUAL 0 OR NOT EXISTS "${archive_path}")
+            message(FATAL_ERROR
+                "[DeployKit] archivegen failed for '${CMAKE_INSTALL_COMPONENT}' (${archive_result}): ${archive_error}${archive_output}"
+            )
+        endif()
+    else()
+        message(STATUS
+            "[DeployKit] Reusing cached IFW archive for ${CMAKE_INSTALL_COMPONENT} ${component_version}."
+        )
+    endif()
+
+    file(INSTALL
+        DESTINATION "${CMAKE_INSTALL_PREFIX}"
+        TYPE FILE
+        FILES "${archive_path}"
+    )
+    return()
+endif()
+
+foreach(relative_file IN LISTS owned_files)
+    get_filename_component(relative_dir "${relative_file}" DIRECTORY)
+    set(destination "${CMAKE_INSTALL_PREFIX}")
+    if(relative_dir AND NOT relative_dir STREQUAL ".")
+        string(APPEND destination "/${relative_dir}")
+    endif()
+    file(INSTALL
+        DESTINATION "${destination}"
+        TYPE FILE
+        FILES "${bundle_source}/${relative_file}"
+    )
+endforeach()
