@@ -36,10 +36,10 @@ By default, DeployKit preserves an existing bundle directory so unchanged files 
 ## Platform Behavior
 
 - macOS: installs an app bundle, runs `macdeployqt` when available, copies extra libraries into `Contents/Frameworks`, runs recursive dependency scanning, and stages DragNDrop DMGs with only the `.app` at the image root.
-- Windows: installs each configuration under its own bundle subdirectory, copies extra libraries next to the executable, runs `windeployqt` when available, and recursively copies non-system runtime dependencies. The IFW package keeps the application required and exposes missing MSVC and Windows SDK prerequisites separately. Debug bundles skip release-only VTK Qt runtimes.
+- Windows: installs each configuration under its own bundle subdirectory, copies extra libraries next to the executable, runs `windeployqt` when available, and recursively copies non-system runtime dependencies. The IFW package keeps the application required and exposes missing MSVC and Windows SDK prerequisites separately. Component uninstall operations must not schedule target-directory deletion because IFW also replays them while replacing a package during updates. Debug bundles skip release-only VTK Qt runtimes.
 - All platforms place generated bundle contents below a configuration subdirectory such as `Debug` or `Release` to avoid runtime mixing when one build tree produces multiple configurations.
 - Linux: installs the executable, copies selected Qt plugin directories into `plugins` including Wayland client graphics integrations, writes `qt.conf`, installs extra libraries under `lib`, runs recursive dependency scanning, and rewrites bundled ELF RPATH/RUNPATH entries with `patchelf`.
-- CPack is configured as `DragNDrop` on macOS, `ZIP` on Windows, and `TGZ` on Linux.
+- CPack is configured as `DragNDrop` on macOS, `IFW` on Windows, and `TGZ` on Linux.
 
 ## Current Limitations
 
