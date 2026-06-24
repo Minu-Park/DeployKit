@@ -51,6 +51,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
     set(oneValueArgs
         MACOSX_ICON
         DESTINATION
+        IFW_COMPONENT_MANIFEST
         VS_BUILD_TOOLS_BOOTSTRAPPER
         VS_BUILD_TOOLS_MSVC_COMPONENT
         VS_BUILD_TOOLS_SDK_COMPONENT
@@ -59,6 +60,77 @@ macro(deploykit_configure_bundling TARGET_NAME)
     cmake_parse_arguments(DEPLOY "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     message(STATUS "[DeployKit] Configuring deployment for target: ${TARGET_NAME}")
+
+    if(CPACK_IFW_ROOT)
+        file(TO_CMAKE_PATH "${CPACK_IFW_ROOT}" deploykit_ifw_root_normalized)
+        set(CPACK_IFW_ROOT "${deploykit_ifw_root_normalized}" CACHE PATH
+            "Qt Installer Framework root used by CPack IFW." FORCE)
+    endif()
+
+    get_target_property(deploykit_target_output_name ${TARGET_NAME} OUTPUT_NAME)
+    if(NOT deploykit_target_output_name)
+        set(deploykit_target_output_name "${TARGET_NAME}")
+    endif()
+
+    set(deploykit_ifw_components "")
+    if(WIN32 AND DEPLOY_IFW_COMPONENT_MANIFEST)
+        if(NOT EXISTS "${DEPLOY_IFW_COMPONENT_MANIFEST}")
+            message(FATAL_ERROR
+                "[DeployKit] IFW component manifest not found: ${DEPLOY_IFW_COMPONENT_MANIFEST}"
+            )
+        endif()
+        include("${DEPLOY_IFW_COMPONENT_MANIFEST}")
+        if(NOT DEPLOYKIT_IFW_COMPONENTS OR NOT DEPLOYKIT_IFW_DEFAULT_COMPONENT)
+            message(FATAL_ERROR
+                "[DeployKit] IFW component manifest must define DEPLOYKIT_IFW_COMPONENTS and DEPLOYKIT_IFW_DEFAULT_COMPONENT."
+            )
+        endif()
+        list(FIND DEPLOYKIT_IFW_COMPONENTS "${DEPLOYKIT_IFW_DEFAULT_COMPONENT}" deploykit_default_component_index)
+        if(deploykit_default_component_index EQUAL -1)
+            message(FATAL_ERROR
+                "[DeployKit] Default IFW component '${DEPLOYKIT_IFW_DEFAULT_COMPONENT}' is not registered."
+            )
+        endif()
+        set(deploykit_ifw_components ${DEPLOYKIT_IFW_COMPONENTS})
+        find_program(deploykit_ifw_archivegen
+            NAMES archivegen archivegen.exe
+            HINTS "${CPACK_IFW_ROOT}/bin"
+            DOC "Qt IFW archive generator used for reusable component archives."
+        )
+        foreach(deploykit_ifw_component IN LISTS deploykit_ifw_components)
+            set(deploykit_cache_var "DEPLOYKIT_IFW_COMPONENT_${deploykit_ifw_component}_CACHE_ARCHIVE")
+            if(${deploykit_cache_var} AND NOT deploykit_ifw_archivegen)
+                message(FATAL_ERROR
+                    "[DeployKit] archivegen is required by cached IFW component '${deploykit_ifw_component}'."
+                )
+            endif()
+        endforeach()
+        set(deploykit_ifw_component_script "${CMAKE_CURRENT_BINARY_DIR}/deploykit_ifw_component_install.cmake")
+        set(deploykit_ifw_runtime_component_script
+            "${CMAKE_CURRENT_BINARY_DIR}/deploykit_ifw_runtime_component.qs"
+        )
+        configure_file(
+            "${DEPLOYKIT_MODULE_DIR}/ifw_component_install.cmake.in"
+            "${deploykit_ifw_component_script}"
+            @ONLY
+        )
+        configure_file(
+            "${DEPLOYKIT_MODULE_DIR}/ifw_runtime_component.qs.in"
+            "${deploykit_ifw_runtime_component_script}"
+            @ONLY
+        )
+        foreach(deploykit_ifw_component IN LISTS deploykit_ifw_components)
+            install(SCRIPT "${deploykit_ifw_component_script}"
+                COMPONENT "${deploykit_ifw_component}"
+            )
+        endforeach()
+        if(DEPLOYKIT_IFW_UPDATE_COMPONENTS)
+            list(JOIN DEPLOYKIT_IFW_UPDATE_COMPONENTS "\n" deploykit_ifw_update_component_lines)
+            file(WRITE "${CMAKE_BINARY_DIR}/ifw-update-components.txt"
+                "${deploykit_ifw_update_component_lines}\n"
+            )
+        endif()
+    endif()
 
     _deploykit_collect_target_runtime_paths(${TARGET_NAME} ${TARGET_NAME} deploykit_auto_libpaths)
     list(APPEND DEPLOY_LIBPATHS ${deploykit_auto_libpaths})
@@ -79,10 +151,6 @@ macro(deploykit_configure_bundling TARGET_NAME)
         message(STATUS "[DeployKit] Setting default CMAKE_INSTALL_PREFIX to: ${CMAKE_INSTALL_PREFIX}")
     endif()
 
-    get_target_property(deploykit_target_output_name ${TARGET_NAME} OUTPUT_NAME)
-    if(NOT deploykit_target_output_name)
-        set(deploykit_target_output_name "${TARGET_NAME}")
-    endif()
     if(DEFINED DEPLOY_DESTINATION)
         set(deploykit_bundle_destination "${DEPLOY_DESTINATION}")
     else()
@@ -1081,15 +1149,17 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
 
             # Package the already-validated bundle as an explicit component. CPack's
             # reserved Unspecified component is always hidden by CMake.
-            install(CODE "
-                if(CMAKE_INSTALL_COMPONENT STREQUAL \"Playground\")
-                    set(deploykit_bundle_source \"${CMAKE_BINARY_DIR}/bundle/\${CMAKE_INSTALL_CONFIG_NAME}\")
-                    if(NOT EXISTS \"\${deploykit_bundle_source}/${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}\")
-                        message(FATAL_ERROR \"[DeployKit] Bundle is missing: \${deploykit_bundle_source}\")
+            if(NOT deploykit_ifw_components)
+                install(CODE "
+                    if(CMAKE_INSTALL_COMPONENT STREQUAL \"Playground\")
+                        set(deploykit_bundle_source \"${CMAKE_BINARY_DIR}/bundle/\${CMAKE_INSTALL_CONFIG_NAME}\")
+                        if(NOT EXISTS \"\${deploykit_bundle_source}/${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}\")
+                            message(FATAL_ERROR \"[DeployKit] Bundle is missing: \${deploykit_bundle_source}\")
+                        endif()
+                        file(COPY \"\${deploykit_bundle_source}/\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}\")
                     endif()
-                    file(COPY \"\${deploykit_bundle_source}/\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}\")
-                endif()
-            " COMPONENT Playground)
+                " COMPONENT Playground)
+            endif()
 
             # Generate separate prerequisite scripts when the Build Tools bootstrapper is available.
             set(deploykit_vs_bootstrapper "${DEPLOY_VS_BUILD_TOOLS_BOOTSTRAPPER}")
@@ -1174,22 +1244,81 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
         include(CPackIFW)
         set(CPACK_COMPONENTS_GROUPING IGNORE)
 
-        if(EXISTS "${deploykit_vs_bootstrapper}")
-            set(CPACK_COMPONENTS_ALL Playground MSVCBuildTools WindowsSDK)
+        if(deploykit_ifw_components)
+            set(CPACK_COMPONENTS_ALL ${deploykit_ifw_components})
         else()
             set(CPACK_COMPONENTS_ALL Playground)
         endif()
+        if(EXISTS "${deploykit_vs_bootstrapper}")
+            list(APPEND CPACK_COMPONENTS_ALL MSVCBuildTools WindowsSDK)
+        endif()
 
-        cpack_add_component(Playground
-            DISPLAY_NAME "Basler Playground"
-            DESCRIPTION "Basler Playground main application and dependencies"
-            REQUIRED
-        )
-        cpack_ifw_configure_component(Playground
-            SCRIPT "${deploykit_script_out}"
-            FORCED_INSTALLATION
-            SORTING_PRIORITY 100
-        )
+        if(deploykit_ifw_components)
+            foreach(deploykit_ifw_component IN LISTS deploykit_ifw_components)
+                set(deploykit_display_var "DEPLOYKIT_IFW_COMPONENT_${deploykit_ifw_component}_DISPLAY_NAME")
+                set(deploykit_description_var "DEPLOYKIT_IFW_COMPONENT_${deploykit_ifw_component}_DESCRIPTION")
+                set(deploykit_version_var "DEPLOYKIT_IFW_COMPONENT_${deploykit_ifw_component}_VERSION")
+                set(deploykit_dependencies_var "DEPLOYKIT_IFW_COMPONENT_${deploykit_ifw_component}_DEPENDENCIES")
+                set(deploykit_replaces_var "DEPLOYKIT_IFW_COMPONENT_${deploykit_ifw_component}_REPLACES")
+                set(deploykit_required_var "DEPLOYKIT_IFW_COMPONENT_${deploykit_ifw_component}_REQUIRED")
+                set(deploykit_hidden_var "DEPLOYKIT_IFW_COMPONENT_${deploykit_ifw_component}_HIDDEN")
+                set(deploykit_default_var "DEPLOYKIT_IFW_COMPONENT_${deploykit_ifw_component}_DEFAULT")
+                set(deploykit_priority_var "DEPLOYKIT_IFW_COMPONENT_${deploykit_ifw_component}_SORTING_PRIORITY")
+                set(deploykit_hide_installer_var "DEPLOYKIT_IFW_COMPONENT_${deploykit_ifw_component}_HIDE_DURING_INSTALL")
+
+                set(deploykit_cpack_component_args)
+                if(${deploykit_required_var})
+                    list(APPEND deploykit_cpack_component_args REQUIRED)
+                endif()
+                if(${deploykit_hidden_var})
+                    list(APPEND deploykit_cpack_component_args HIDDEN)
+                endif()
+                cpack_add_component(${deploykit_ifw_component}
+                    DISPLAY_NAME "${${deploykit_display_var}}"
+                    DESCRIPTION "${${deploykit_description_var}}"
+                    ${deploykit_cpack_component_args}
+                )
+
+                set(deploykit_ifw_component_args
+                    VERSION "${${deploykit_version_var}}"
+                    SORTING_PRIORITY "${${deploykit_priority_var}}"
+                )
+                if(${deploykit_required_var})
+                    list(APPEND deploykit_ifw_component_args FORCED_INSTALLATION)
+                endif()
+                if(${deploykit_hidden_var})
+                    list(APPEND deploykit_ifw_component_args VIRTUAL)
+                endif()
+                if(DEFINED ${deploykit_default_var})
+                    list(APPEND deploykit_ifw_component_args DEFAULT "${${deploykit_default_var}}")
+                endif()
+                if(${deploykit_dependencies_var})
+                    list(APPEND deploykit_ifw_component_args DEPENDS ${${deploykit_dependencies_var}})
+                endif()
+                if(${deploykit_replaces_var})
+                    list(APPEND deploykit_ifw_component_args REPLACES ${${deploykit_replaces_var}})
+                endif()
+                if(deploykit_ifw_component STREQUAL DEPLOYKIT_IFW_SHORTCUT_COMPONENT)
+                    list(APPEND deploykit_ifw_component_args SCRIPT "${deploykit_script_out}")
+                elseif(${deploykit_hide_installer_var})
+                    list(APPEND deploykit_ifw_component_args SCRIPT "${deploykit_ifw_runtime_component_script}")
+                endif()
+                cpack_ifw_configure_component(${deploykit_ifw_component}
+                    ${deploykit_ifw_component_args}
+                )
+            endforeach()
+        else()
+            cpack_add_component(Playground
+                DISPLAY_NAME "Basler Playground"
+                DESCRIPTION "Basler Playground main application and dependencies"
+                REQUIRED
+            )
+            cpack_ifw_configure_component(Playground
+                SCRIPT "${deploykit_script_out}"
+                FORCED_INSTALLATION
+                SORTING_PRIORITY 100
+            )
+        endif()
 
         if(EXISTS "${deploykit_vs_bootstrapper}")
             cpack_add_component_group(DevelopmentPrerequisites
@@ -1209,6 +1338,7 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
             cpack_ifw_configure_component(MSVCBuildTools
                 SCRIPT "${deploykit_msvc_script_out}"
                 SORTING_PRIORITY 40
+                DEPENDS ${DEPLOYKIT_IFW_PREREQUISITE_PAYLOAD_COMPONENT}
             )
 
             cpack_add_component(WindowsSDK
@@ -1219,6 +1349,7 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
             cpack_ifw_configure_component(WindowsSDK
                 SCRIPT "${deploykit_windows_sdk_script_out}"
                 SORTING_PRIORITY 30
+                DEPENDS ${DEPLOYKIT_IFW_PREREQUISITE_PAYLOAD_COMPONENT}
             )
         endif()
     endif()

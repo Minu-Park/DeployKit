@@ -1,0 +1,6 @@
+function Component()
+{
+    if (installer.isInstaller()) {
+        component.setValue("Virtual", "true");
+    }
+}
