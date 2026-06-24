@@ -30,7 +30,7 @@ function hasWindowsSdk() {
 
 function Component() {
     var installed = hasWindowsSdk();
-    component.setValue("Default", "true");
+    component.setValue("Default", installed ? "false" : "true");
     component.enabled = !installed;
     if (installed)
         component.setValue("Description", "Already installed; no action is required");
