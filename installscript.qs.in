@@ -1,5 +1,9 @@
 function Component() {
-    // Constructor
+    // IFW keeps the product version from the original offline installer unless
+    // an updated core component refreshes it before the maintenance tool is
+    // rewritten. Windows uses this value for Apps & Features DisplayVersion.
+    if (systemInfo.productType === "windows")
+        installer.setValue("ProductVersion", "@CPACK_PACKAGE_VERSION@");
 }
 
 Component.prototype.createOperations = function() {
