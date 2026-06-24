@@ -11,6 +11,28 @@ Component.prototype.createOperations = function() {
     component.createOperations();
 
     if (systemInfo.productType === "windows") {
+        var updateDisplayVersionScript =
+            "$target = [System.IO.Path]::GetFullPath('@DEPLOYKIT_IFW_TARGET_DIR@').TrimEnd('\\\\'); " +
+            "$roots = @(" +
+            "'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall'," +
+            "'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall'," +
+            "'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall'); " +
+            "foreach ($root in $roots) { " +
+            "if (-not (Test-Path $root)) { continue } " +
+            "foreach ($key in Get-ChildItem $root) { " +
+            "$entry = Get-ItemProperty $key.PSPath -ErrorAction SilentlyContinue; " +
+            "if ($entry.DisplayName -ne '@DEPLOYKIT_TARGET_NAME@' -or -not $entry.InstallLocation) { continue } " +
+            "try { $location = [System.IO.Path]::GetFullPath([string]$entry.InstallLocation).TrimEnd('\\\\') } catch { continue } " +
+            "if ($location -ieq $target) { Set-ItemProperty -Path $key.PSPath -Name DisplayVersion -Value '@CPACK_PACKAGE_VERSION@' } " +
+            "} }";
+        component.addOperation("Execute",
+                               "powershell.exe",
+                               "-NoProfile",
+                               "-ExecutionPolicy",
+                               "Bypass",
+                               "-Command",
+                               updateDisplayVersionScript);
+
         // Start Menu Shortcut
         component.addOperation("CreateShortcut",
                                "@DEPLOYKIT_IFW_TARGET_DIR@/@DEPLOYKIT_TARGET_EXE@",
