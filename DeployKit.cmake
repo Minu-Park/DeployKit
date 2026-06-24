@@ -136,17 +136,13 @@ macro(deploykit_configure_bundling TARGET_NAME)
     list(APPEND DEPLOY_LIBPATHS ${deploykit_auto_libpaths})
     list(REMOVE_DUPLICATES DEPLOY_LIBPATHS)
 
-    # Keep macOS app bundles in the source tree for easy Finder access.
-    # On Linux/Windows, prefer the binary tree so out-of-source or shared-folder
-    # builds do not have to write executable files back into the source mount.
+    # Keep generated bundles in the binary tree on every platform. This preserves
+    # out-of-source build isolation and avoids writing artifacts into a read-only
+    # or shared source checkout.
     if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT OR 
        CMAKE_INSTALL_PREFIX STREQUAL "/usr/local" OR 
        CMAKE_INSTALL_PREFIX MATCHES "^[a-zA-Z]:/Program Files")
-        if(APPLE)
-            set(deploykit_default_install_prefix "${CMAKE_SOURCE_DIR}/build/bundle")
-        else()
-            set(deploykit_default_install_prefix "${CMAKE_BINARY_DIR}/bundle")
-        endif()
+        set(deploykit_default_install_prefix "${CMAKE_BINARY_DIR}/bundle")
         set(CMAKE_INSTALL_PREFIX "${deploykit_default_install_prefix}" CACHE PATH "Install path prefix" FORCE)
         message(STATUS "[DeployKit] Setting default CMAKE_INSTALL_PREFIX to: ${CMAKE_INSTALL_PREFIX}")
     endif()
