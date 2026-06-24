@@ -92,20 +92,65 @@ if(${cache_var})
     set(archive_path "${archive_dir}/${CMAKE_INSTALL_COMPONENT}.7z")
     if(NOT EXISTS "${archive_path}")
         file(MAKE_DIRECTORY "${archive_dir}")
+        set(archive_working_directory "${bundle_source}")
+        set(archive_sources ${owned_files})
+        set(has_nested_files FALSE)
+        foreach(relative_file IN LISTS owned_files)
+            if(relative_file MATCHES "/")
+                set(has_nested_files TRUE)
+                break()
+            endif()
+        endforeach()
+        if(has_nested_files)
+            set(archive_stage_dir "${archive_dir}/stage")
+            file(REMOVE_RECURSE "${archive_stage_dir}")
+            file(MAKE_DIRECTORY "${archive_stage_dir}")
+            foreach(relative_file IN LISTS owned_files)
+                get_filename_component(relative_dir "${relative_file}" DIRECTORY)
+                if(relative_dir AND NOT relative_dir STREQUAL ".")
+                    file(MAKE_DIRECTORY "${archive_stage_dir}/${relative_dir}")
+                endif()
+                file(COPY_FILE
+                    "${bundle_source}/${relative_file}"
+                    "${archive_stage_dir}/${relative_file}"
+                    RESULT copy_result
+                )
+                if(NOT copy_result STREQUAL "0")
+                    message(FATAL_ERROR
+                        "[DeployKit] Failed to stage '${relative_file}' for '${CMAKE_INSTALL_COMPONENT}': ${copy_result}"
+                    )
+                endif()
+            endforeach()
+            set(archive_working_directory "${archive_stage_dir}")
+            set(archive_sources ".")
+        endif()
         message(STATUS
             "[DeployKit] Compressing IFW component ${CMAKE_INSTALL_COMPONENT} ${component_version}..."
         )
+        set(archive_temp_path "${archive_path}.tmp.7z")
+        file(REMOVE "${archive_temp_path}")
         execute_process(
             COMMAND "@deploykit_ifw_archivegen@" -f 7z -c 5
-                "${archive_path}" ${owned_files}
-            WORKING_DIRECTORY "${bundle_source}"
+                "${archive_temp_path}" ${archive_sources}
+            WORKING_DIRECTORY "${archive_working_directory}"
             RESULT_VARIABLE archive_result
             OUTPUT_VARIABLE archive_output
             ERROR_VARIABLE archive_error
         )
-        if(NOT archive_result EQUAL 0 OR NOT EXISTS "${archive_path}")
+        if(has_nested_files)
+            file(REMOVE_RECURSE "${archive_stage_dir}")
+        endif()
+        if(NOT archive_result EQUAL 0 OR NOT EXISTS "${archive_temp_path}")
+            file(REMOVE "${archive_temp_path}")
             message(FATAL_ERROR
                 "[DeployKit] archivegen failed for '${CMAKE_INSTALL_COMPONENT}' (${archive_result}): ${archive_error}${archive_output}"
+            )
+        endif()
+        file(RENAME "${archive_temp_path}" "${archive_path}" RESULT rename_result)
+        if(NOT rename_result STREQUAL "0")
+            file(REMOVE "${archive_temp_path}")
+            message(FATAL_ERROR
+                "[DeployKit] Failed to publish cached archive for '${CMAKE_INSTALL_COMPONENT}': ${rename_result}"
             )
         endif()
     else()
