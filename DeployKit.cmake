@@ -242,10 +242,12 @@ macro(deploykit_configure_bundling TARGET_NAME)
                     USE_SOURCE_PERMISSIONS
                 )
             elseif(EXISTS "${file}")
-                install(FILES "${file}"
-                    DESTINATION ${deploykit_bundle_destination}/${TARGET_NAME}.app/Contents/Frameworks
-                )
+                get_filename_component(real_file "${file}" REALPATH)
                 get_filename_component(file_name "${file}" NAME)
+                install(FILES "${real_file}"
+                    DESTINATION ${deploykit_bundle_destination}/${TARGET_NAME}.app/Contents/Frameworks
+                    RENAME "${file_name}"
+                )
                 list(APPEND deploykit_macos_analyze_binaries
                     "\${bundle_prefix}/${TARGET_NAME}.app/Contents/Frameworks/${file_name}"
                 )
@@ -523,8 +525,11 @@ macro(deploykit_configure_bundling TARGET_NAME)
                     USE_SOURCE_PERMISSIONS
                 )
             elseif(EXISTS "${file}")
-                install(FILES "${file}"
+                get_filename_component(real_file "${file}" REALPATH)
+                get_filename_component(file_name "${file}" NAME)
+                install(FILES "${real_file}"
                     DESTINATION ${deploykit_bundle_destination}
+                    RENAME "${file_name}"
                 )
             else()
                 message(WARNING "[DeployKit] EXTRA_FILES entry does not exist: ${file}")
@@ -804,10 +809,12 @@ macro(deploykit_configure_bundling TARGET_NAME)
                     USE_SOURCE_PERMISSIONS
                 )
             elseif(EXISTS "${file}")
-                install(FILES "${file}"
-                    DESTINATION ${deploykit_bundle_destination}/lib
-                )
+                get_filename_component(real_file "${file}" REALPATH)
                 get_filename_component(file_name "${file}" NAME)
+                install(FILES "${real_file}"
+                    DESTINATION ${deploykit_bundle_destination}/lib
+                    RENAME "${file_name}"
+                )
                 list(APPEND deploykit_linux_analyze_binaries
                     "\${bundle_prefix}/lib/${file_name}"
                 )
