@@ -11,8 +11,13 @@ Component.prototype.createOperations = function() {
     component.createOperations();
 
     if (systemInfo.productType === "windows") {
-        var updateDisplayVersionScript =
+        var updateRegistrationScript =
             "$target = [System.IO.Path]::GetFullPath('@DEPLOYKIT_IFW_TARGET_DIR@').TrimEnd('\\\\'); " +
+            "$bytes = (Get-ChildItem -LiteralPath $target -Recurse -File -Force -ErrorAction SilentlyContinue | " +
+            "Measure-Object -Property Length -Sum).Sum; " +
+            "if ($null -eq $bytes) { $bytes = 0 } " +
+            "$estimatedSize = [Math]::Ceiling([double]$bytes / 1KB); " +
+            "if ($estimatedSize -gt [uint32]::MaxValue) { $estimatedSize = [uint32]::MaxValue } " +
             "$roots = @(" +
             "'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall'," +
             "'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall'," +
@@ -23,15 +28,18 @@ Component.prototype.createOperations = function() {
             "$entry = Get-ItemProperty $key.PSPath -ErrorAction SilentlyContinue; " +
             "if ($entry.DisplayName -ne '@DEPLOYKIT_TARGET_NAME@' -or -not $entry.InstallLocation) { continue } " +
             "try { $location = [System.IO.Path]::GetFullPath([string]$entry.InstallLocation).TrimEnd('\\\\') } catch { continue } " +
-            "if ($location -ieq $target) { Set-ItemProperty -Path $key.PSPath -Name DisplayVersion -Value '@CPACK_PACKAGE_VERSION@' } " +
+            "if ($location -ieq $target) { " +
+            "Set-ItemProperty -Path $key.PSPath -Name DisplayVersion -Value '@DEPLOYKIT_PRODUCT_DISPLAY_VERSION@'; " +
+            "New-ItemProperty -Path $key.PSPath -Name EstimatedSize -Value ([uint32]$estimatedSize) -PropertyType DWord -Force | Out-Null " +
+            "} " +
             "} }";
-        component.addOperation("Execute",
-                               "powershell.exe",
-                               "-NoProfile",
-                               "-ExecutionPolicy",
-                               "Bypass",
-                               "-Command",
-                               updateDisplayVersionScript);
+        component.addElevatedOperation("Execute",
+                                       "powershell.exe",
+                                       "-NoProfile",
+                                       "-ExecutionPolicy",
+                                       "Bypass",
+                                       "-Command",
+                                       updateRegistrationScript);
 
         // Start Menu Shortcut
         component.addOperation("CreateShortcut",
