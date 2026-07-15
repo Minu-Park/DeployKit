@@ -45,6 +45,10 @@ endfunction()
 
 macro(deploykit_configure_bundling TARGET_NAME)
     option(DEPLOYKIT_CLEAN_BUNDLE "Remove the existing bundle directory before installing." OFF)
+    option(DEPLOYKIT_MACOS_ADHOC_SIGNING
+        "Ad-hoc sign the macOS app bundle after deployment."
+        ON
+    )
 
     # Parse arguments
     set(options)
@@ -56,7 +60,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
         VS_BUILD_TOOLS_MSVC_COMPONENT
         VS_BUILD_TOOLS_SDK_COMPONENT
     )
-    set(multiValueArgs EXTRA_LIBS EXTRA_FILES LIBPATHS ANALYZE_BINARIES)
+    set(multiValueArgs EXTRA_LIBS EXTRA_FILES LIBPATHS ANALYZE_BINARIES MACOS_TRANSIENT_FILES)
     cmake_parse_arguments(DEPLOY "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     message(STATUS "[DeployKit] Configuring deployment for target: ${TARGET_NAME}")
@@ -267,6 +271,18 @@ macro(deploykit_configure_bundling TARGET_NAME)
                 list(APPEND macdeployqt_libpaths "-libpath=${path}")
             endforeach()
 
+            if(DEPLOYKIT_MACOS_ADHOC_SIGNING)
+                set(deploykit_macos_codesign_condition TRUE)
+            else()
+                set(deploykit_macos_codesign_condition FALSE)
+            endif()
+
+            set(deploykit_macos_transient_file_args "")
+            foreach(deploykit_macos_transient_file ${DEPLOY_MACOS_TRANSIENT_FILES})
+                string(APPEND deploykit_macos_transient_file_args
+                    " \"${deploykit_macos_transient_file}\"")
+            endforeach()
+
             install(CODE "
                 get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
                 set(deploykit_config_name \"\${CMAKE_INSTALL_CONFIG_NAME}\")
@@ -428,39 +444,105 @@ macro(deploykit_configure_bundling TARGET_NAME)
                     endforeach()
                 endwhile()
 
-            # Ad-hoc codesign the bundle. Sign via /tmp to avoid iCloud/fileprovider
-            # xattr interference, and sign inside-out (frameworks then app).
+                foreach(_dk_transient_file${deploykit_macos_transient_file_args})
+                    set(_dk_transient_path \"\${bundle_prefix}/${TARGET_NAME}.app/Contents/MacOS/\${_dk_transient_file}\")
+                    if(EXISTS \"\${_dk_transient_path}\")
+                        file(REMOVE \"\${_dk_transient_path}\")
+                        message(STATUS \"[DeployKit] Removed transient macOS bundle state: \${_dk_transient_path}\")
+                    endif()
+                endforeach()
+
+            if(${deploykit_macos_codesign_condition})
+            # Ad-hoc codesign via /tmp to avoid iCloud/fileprovider xattr interference.
             message(STATUS \"[DeployKit] Ad-hoc code signing \${bundle_prefix}/${TARGET_NAME}.app ...\")
             set(_dk_sign_source \"\${bundle_prefix}/${TARGET_NAME}.app\")
             set(_dk_tmp \"/tmp/_deploykit_sign_${TARGET_NAME}.app\")
             file(REMOVE_RECURSE \"\${_dk_tmp}\")
-            execute_process(COMMAND \${CMAKE_COMMAND} -E copy_directory \"\${_dk_sign_source}\" \"\${_dk_tmp}\")
+            execute_process(COMMAND ditto --norsrc \"\${_dk_sign_source}\" \"\${_dk_tmp}\")
             execute_process(COMMAND xattr -rc \"\${_dk_tmp}\" ERROR_QUIET)
 
-            # Sign frameworks and dylibs first
-            file(GLOB _dk_frameworks \"\${_dk_tmp}/Contents/Frameworks/*.framework\")
-            file(GLOB _dk_dylibs \"\${_dk_tmp}/Contents/Frameworks/*.dylib\")
-            foreach(_dk_item \${_dk_frameworks} \${_dk_dylibs})
-                execute_process(
-                    COMMAND codesign --force -s - \"\${_dk_item}\"
-                    ERROR_QUIET
-                )
-            endforeach()
-
-            # Sign the top-level app bundle
+            # Let macdeployqt sign its Qt dependencies and all discovered
+            # non-Qt Mach-O files after dependency collection is complete.
             execute_process(
-                COMMAND codesign --force -s - \"\${_dk_tmp}\"
+                COMMAND \"${MACDEPLOYQT_PATH}\" \"\${_dk_tmp}\" -codesign=- -verbose=0
+                RESULT_VARIABLE _dk_sign_deploy_result
+                ERROR_VARIABLE _dk_sign_deploy_error
+            )
+            if(NOT _dk_sign_deploy_result EQUAL 0)
+                file(REMOVE_RECURSE \"\${_dk_tmp}\")
+                message(FATAL_ERROR \"[DeployKit] macdeployqt signing failed: \${_dk_sign_deploy_error}\")
+            endif()
+
+            # macdeployqt signs the standard Qt layout. Deep ad-hoc signing
+            # then covers nested third-party Mach-O files such as pylon.
+            execute_process(
+                COMMAND codesign --force --deep -s - \"\${_dk_tmp}\"
                 RESULT_VARIABLE codesign_res
                 ERROR_VARIABLE codesign_err
             )
             if(codesign_res EQUAL 0)
+                execute_process(
+                    COMMAND codesign --verify --deep --strict \"\${_dk_tmp}\"
+                    RESULT_VARIABLE _dk_verify_result
+                    ERROR_VARIABLE _dk_verify_error
+                )
+                if(NOT _dk_verify_result EQUAL 0)
+                    file(REMOVE_RECURSE \"\${_dk_tmp}\")
+                    message(FATAL_ERROR \"[DeployKit] Ad-hoc codesign verification failed: \${_dk_verify_error}\")
+                endif()
                 file(REMOVE_RECURSE \"\${_dk_sign_source}\")
-                execute_process(COMMAND \${CMAKE_COMMAND} -E copy_directory \"\${_dk_tmp}\" \"\${_dk_sign_source}\")
-                file(REMOVE_RECURSE \"\${_dk_tmp}\")
+                execute_process(COMMAND mv \"\${_dk_tmp}\" \"\${_dk_sign_source}\")
                 message(STATUS \"[DeployKit] Ad-hoc codesign complete.\")
             else()
                 file(REMOVE_RECURSE \"\${_dk_tmp}\")
-                message(WARNING \"[DeployKit] Ad-hoc codesign failed: \${codesign_err}\")
+                message(FATAL_ERROR \"[DeployKit] Ad-hoc codesign failed: \${codesign_err}\")
+            endif()
+            else()
+                message(STATUS \"[DeployKit] Leaving macOS app bundle unsigned (standalone local build).\")
+                file(GLOB_RECURSE _dk_macos_files \"\${bundle_prefix}/${TARGET_NAME}.app/Contents/*\")
+                foreach(_dk_macos_file \${_dk_macos_files})
+                    if(IS_DIRECTORY \"\${_dk_macos_file}\")
+                        continue()
+                    endif()
+
+                    execute_process(
+                        COMMAND /usr/bin/file \"\${_dk_macos_file}\"
+                        OUTPUT_VARIABLE _dk_file_type
+                        ERROR_QUIET
+                    )
+                    if(NOT _dk_file_type MATCHES \"Mach-O\")
+                        continue()
+                    endif()
+
+                    execute_process(
+                        COMMAND /usr/bin/otool -l \"\${_dk_macos_file}\"
+                        OUTPUT_VARIABLE _dk_otool_output
+                        ERROR_QUIET
+                    )
+                    string(REGEX MATCHALL \"path [^ ]+\" _dk_rpath_entries \"\${_dk_otool_output}\")
+                    list(REMOVE_DUPLICATES _dk_rpath_entries)
+                    foreach(_dk_rpath_entry \${_dk_rpath_entries})
+                        string(REGEX REPLACE \"^path \" \"\" _dk_rpath \"\${_dk_rpath_entry}\")
+                        if(_dk_rpath MATCHES \"^/(Applications|Library/Frameworks|opt|Users|private)/\")
+                            execute_process(
+                                COMMAND /usr/bin/install_name_tool
+                                    -delete_rpath \"\${_dk_rpath}\" \"\${_dk_macos_file}\"
+                                RESULT_VARIABLE _dk_rpath_result
+                                ERROR_VARIABLE _dk_rpath_error
+                            )
+                            if(NOT _dk_rpath_result EQUAL 0)
+                                message(FATAL_ERROR
+                                    \"[DeployKit] Failed to remove external macOS RPATH '\${_dk_rpath}' from \${_dk_macos_file}: \${_dk_rpath_error}\"
+                                )
+                            endif()
+                        endif()
+                    endforeach()
+
+                    execute_process(
+                        COMMAND codesign --remove-signature \"\${_dk_macos_file}\"
+                        ERROR_QUIET
+                    )
+                endforeach()
             endif()
             ")
         endif()

@@ -33,10 +33,12 @@ By default, DeployKit preserves an existing bundle directory so unchanged files 
 - `VS_BUILD_TOOLS_BOOTSTRAPPER`: optional Windows Build Tools bootstrapper packaged with the application.
 - `VS_BUILD_TOOLS_MSVC_COMPONENT`: Visual Studio Installer component ID exposed as an optional installer prerequisite.
 - `VS_BUILD_TOOLS_SDK_COMPONENT`: Windows SDK component ID exposed as a separate optional installer prerequisite.
+- `DEPLOYKIT_MACOS_ADHOC_SIGNING`: macOS ad-hoc signing; enabled by default so local standalone bundles contain a consistent executable/dependency signature set.
+- `MACOS_TRANSIENT_FILES`: macOS files copied next to the executable during development but removed before bundle signing.
 
 ## Platform Behavior
 
-- macOS: installs an app bundle, runs `macdeployqt` when available, copies extra libraries into `Contents/Frameworks`, runs recursive dependency scanning, and stages DragNDrop DMGs with only the `.app` at the image root.
+- macOS: installs an ad-hoc signed standalone app bundle by default, runs `macdeployqt`, copies extra libraries into `Contents/Frameworks`, runs recursive dependency scanning, signs nested Mach-O files inside-out, and stages DragNDrop DMGs with only the `.app` at the image root. Set `DEPLOYKIT_MACOS_ADHOC_SIGNING=OFF` only for unsigned diagnostics; production distribution still needs appropriate Developer ID signing and notarization.
 - Windows: installs each configuration under its own bundle subdirectory, copies extra libraries next to the executable, runs `windeployqt` when available, and recursively copies non-system runtime dependencies. The IFW package keeps the application required and exposes missing MSVC and Windows SDK prerequisites separately; detected prerequisites are deselected and disabled so they do not enter the installation summary. Component uninstall operations must not schedule target-directory deletion because IFW also replays them while replacing a package during updates. Debug bundles skip release-only VTK Qt runtimes.
 - The main IFW component refreshes the global ordered `ProductVersion` and updates the matching Windows uninstall `DisplayVersion` from `DEPLOYKIT_PRODUCT_DISPLAY_VERSION` plus `EstimatedSize` after extraction, so prerelease labels and installed footprint remain accurate.
 - A Windows IFW manifest defines `DEPLOYKIT_IFW_COMPONENTS`, `DEPLOYKIT_IFW_DEFAULT_COMPONENT`, per-component metadata, and non-overlapping relative-path regular expressions. Unmatched files belong to the default component; overlapping ownership fails packaging. `DEPLOYKIT_IFW_UPDATE_COMPONENTS` is written to `ifw-update-components.txt` for release tooling.
