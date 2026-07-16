@@ -10,7 +10,7 @@ if(active_component_index EQUAL -1)
 endif()
 
 set(bundle_source "@CMAKE_BINARY_DIR@/bundle/${CMAKE_INSTALL_CONFIG_NAME}")
-if(NOT EXISTS "${bundle_source}/@deploykit_target_output_name@@CMAKE_EXECUTABLE_SUFFIX@")
+if(NOT EXISTS "${bundle_source}/@deploykit_bundle_core_relative_path@")
     message(FATAL_ERROR "[DeployKit] Bundle is missing: ${bundle_source}")
 endif()
 

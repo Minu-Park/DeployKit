@@ -59,6 +59,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
         VS_BUILD_TOOLS_BOOTSTRAPPER
         VS_BUILD_TOOLS_MSVC_COMPONENT
         VS_BUILD_TOOLS_SDK_COMPONENT
+        WINDOWS_LAUNCHER_TARGET
     )
     set(multiValueArgs EXTRA_LIBS EXTRA_FILES LIBPATHS ANALYZE_BINARIES MACOS_TRANSIENT_FILES)
     cmake_parse_arguments(DEPLOY "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
@@ -74,6 +75,24 @@ macro(deploykit_configure_bundling TARGET_NAME)
     get_target_property(deploykit_target_output_name ${TARGET_NAME} OUTPUT_NAME)
     if(NOT deploykit_target_output_name)
         set(deploykit_target_output_name "${TARGET_NAME}")
+    endif()
+
+    # IFW component scripts are configured before the install destination is
+    # resolved, so establish the core executable path up front.
+    set(deploykit_windows_launcher_output_name "")
+    set(deploykit_bundle_core_relative_path
+        "${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
+    if(WIN32 AND DEPLOY_WINDOWS_LAUNCHER_TARGET)
+        if(NOT TARGET ${DEPLOY_WINDOWS_LAUNCHER_TARGET})
+            message(FATAL_ERROR "[DeployKit] WINDOWS_LAUNCHER_TARGET is not a target: ${DEPLOY_WINDOWS_LAUNCHER_TARGET}")
+        endif()
+        get_target_property(deploykit_windows_launcher_output_name
+            ${DEPLOY_WINDOWS_LAUNCHER_TARGET} OUTPUT_NAME)
+        if(NOT deploykit_windows_launcher_output_name)
+            set(deploykit_windows_launcher_output_name "${DEPLOY_WINDOWS_LAUNCHER_TARGET}")
+        endif()
+        set(deploykit_bundle_core_relative_path
+            "bin/${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
     endif()
 
     set(deploykit_ifw_components "")
@@ -155,6 +174,26 @@ macro(deploykit_configure_bundling TARGET_NAME)
         set(deploykit_bundle_destination "${DEPLOY_DESTINATION}")
     else()
         set(deploykit_bundle_destination "$<CONFIG>")
+    endif()
+
+    set(deploykit_windows_runtime_destination "${deploykit_bundle_destination}")
+    set(deploykit_windows_launcher_output_name "")
+    if(WIN32 AND DEPLOY_WINDOWS_LAUNCHER_TARGET)
+        if(NOT TARGET ${DEPLOY_WINDOWS_LAUNCHER_TARGET})
+            message(FATAL_ERROR "[DeployKit] WINDOWS_LAUNCHER_TARGET is not a target: ${DEPLOY_WINDOWS_LAUNCHER_TARGET}")
+        endif()
+        get_target_property(deploykit_windows_launcher_output_name
+            ${DEPLOY_WINDOWS_LAUNCHER_TARGET} OUTPUT_NAME)
+        if(NOT deploykit_windows_launcher_output_name)
+            set(deploykit_windows_launcher_output_name "${DEPLOY_WINDOWS_LAUNCHER_TARGET}")
+        endif()
+       set(deploykit_windows_runtime_destination "${deploykit_bundle_destination}/bin")
+   endif()
+    set(deploykit_bundle_core_relative_path
+        "${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
+    if(deploykit_windows_launcher_output_name)
+        set(deploykit_bundle_core_relative_path
+            "bin/${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
     endif()
 
     if(deploykit_bundle_destination STREQUAL "" OR deploykit_bundle_destination STREQUAL ".")
@@ -577,22 +616,29 @@ macro(deploykit_configure_bundling TARGET_NAME)
             message(WARNING "[DeployKit] vswhere not found! Visual Studio path auto-detection might fail.")
         endif()
 
-        # Install target
+        # The optional launcher remains at the bundle root. The Qt application
+        # and every dependency are first staged under bin/, then classified into
+        # the runtime layout after dependency discovery.
         install(TARGETS ${TARGET_NAME}
-            RUNTIME DESTINATION ${deploykit_bundle_destination}
+            RUNTIME DESTINATION ${deploykit_windows_runtime_destination}
         )
+        if(DEPLOY_WINDOWS_LAUNCHER_TARGET)
+            install(TARGETS ${DEPLOY_WINDOWS_LAUNCHER_TARGET}
+                RUNTIME DESTINATION ${deploykit_bundle_destination}
+            )
+        endif()
 
         # Copy extra libraries next to .exe (they may be implicit imports)
         foreach(lib ${DEPLOY_EXTRA_LIBS})
             if(TARGET ${lib})
                 install(TARGETS ${lib}
-                    RUNTIME DESTINATION ${deploykit_bundle_destination}
-                    LIBRARY DESTINATION ${deploykit_bundle_destination}
+                    RUNTIME DESTINATION ${deploykit_windows_runtime_destination}
+                    LIBRARY DESTINATION ${deploykit_windows_runtime_destination}
                 )
             else()
                 if(EXISTS "${lib}")
                     install(FILES "${lib}"
-                        DESTINATION ${deploykit_bundle_destination}
+                        DESTINATION ${deploykit_windows_runtime_destination}
                     )
                 else()
                     message(STATUS "[DeployKit] Non-target dependency specified: ${lib}. Ensure it is copied next to the executable.")
@@ -603,14 +649,14 @@ macro(deploykit_configure_bundling TARGET_NAME)
         foreach(file ${DEPLOY_EXTRA_FILES})
             if(IS_DIRECTORY "${file}")
                 install(DIRECTORY "${file}"
-                    DESTINATION ${deploykit_bundle_destination}
+                    DESTINATION ${deploykit_windows_runtime_destination}
                     USE_SOURCE_PERMISSIONS
                 )
             elseif(EXISTS "${file}")
                 get_filename_component(real_file "${file}" REALPATH)
                 get_filename_component(file_name "${file}" NAME)
                 install(FILES "${real_file}"
-                    DESTINATION ${deploykit_bundle_destination}
+                    DESTINATION ${deploykit_windows_runtime_destination}
                     RENAME "${file_name}"
                 )
             else()
@@ -621,14 +667,17 @@ macro(deploykit_configure_bundling TARGET_NAME)
         # Include MSVC runtime libraries (vcruntime140.dll, msvcp140.dll, etc.) in the package
         if(WIN32)
             set(CMAKE_INSTALL_OPENMP_LIBRARIES ON)
-            set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION "${deploykit_bundle_destination}")
+            set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION "${deploykit_windows_runtime_destination}")
             include(InstallRequiredSystemLibraries)
         endif()
 
         if(deploykit_bundle_destination MATCHES "\\$<CONFIG>")
             set(install_time_dest "\${CMAKE_INSTALL_CONFIG_NAME}")
+            if(DEPLOY_WINDOWS_LAUNCHER_TARGET)
+                string(APPEND install_time_dest "/bin")
+            endif()
         else()
-            set(install_time_dest "${deploykit_bundle_destination}")
+            set(install_time_dest "${deploykit_windows_runtime_destination}")
         endif()
 
         # Execute windeployqt as a post-install step
@@ -746,6 +795,94 @@ macro(deploykit_configure_bundling TARGET_NAME)
                 endforeach()
             endwhile()
         ")
+
+        if(DEPLOY_WINDOWS_LAUNCHER_TARGET)
+            install(CODE "
+                get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
+                set(dest_sub \"${install_time_dest}\")
+                set(bin_dir \"\${abs_prefix}/\${dest_sub}\")
+                get_filename_component(runtime_root \"\${bin_dir}/..\" ABSOLUTE)
+                foreach(runtime_dir
+                    \"dll/qt\" \"dll/qt/plugins\" \"dll/pylon\"
+                    \"dll/framegrabber/bin\" \"dll/gopxl\" \"dll/vtk\" \"dll/common\"
+                    \"tools/llvm\"
+                )
+                    file(MAKE_DIRECTORY \"\${runtime_root}/\${runtime_dir}\")
+                endforeach()
+
+                function(deploykit_move_runtime_entry entry destination)
+                    set(source \"\${bin_dir}/\${entry}\")
+                    if(NOT EXISTS \"\${source}\")
+                        return()
+                    endif()
+                    set(target \"\${runtime_root}/\${destination}/\${entry}\")
+                    if(IS_DIRECTORY \"\${source}\")
+                        file(REMOVE_RECURSE \"\${target}\")
+                    else()
+                        file(REMOVE \"\${target}\")
+                    endif()
+                    file(RENAME \"\${source}\" \"\${target}\")
+                endfunction()
+
+                foreach(plugin_dir
+                    platforms generic iconengines imageformats networkinformation styles tls
+                )
+                    deploykit_move_runtime_entry(\"\${plugin_dir}\" \"dll/qt/plugins\")
+                endforeach()
+                foreach(framegrabber_bin_dir impl log plugins)
+                    deploykit_move_runtime_entry(\"\${framegrabber_bin_dir}\" \"dll/framegrabber/bin\")
+                endforeach()
+                foreach(framegrabber_sdk_dir dll \"Hardware Applets\" firmware genicam lib)
+                    deploykit_move_runtime_entry(\"\${framegrabber_sdk_dir}\" \"dll/framegrabber\")
+                endforeach()
+                # The Framegrabber SDK also ships its own Qt 5/Qt 6 plugins for
+                # SDK GUI tools. Playground uses its windeployqt-generated Qt
+                # tree exclusively, so never retain these foreign plugin trees.
+                file(REMOVE_RECURSE
+                    \"\${runtime_root}/dll/framegrabber/bin/plugins/qt5\"
+                    \"\${runtime_root}/dll/framegrabber/bin/plugins/qt6\"
+                )
+                file(GLOB_RECURSE framegrabber_legacy_qt_files
+                    \"\${runtime_root}/dll/framegrabber/bin/plugins/*qt4*.dll\"
+                )
+                if(framegrabber_legacy_qt_files)
+                    file(REMOVE \${framegrabber_legacy_qt_files})
+                endif()
+                foreach(pylon_dir
+                    DataProcessingPluginsB pylonCXP pylonDataProcessingPlugins stereo-mini
+                )
+                    deploykit_move_runtime_entry(\"\${pylon_dir}\" \"dll/pylon\")
+                endforeach()
+
+                file(GLOB root_entries RELATIVE \"\${bin_dir}\" \"\${bin_dir}/*\")
+                foreach(entry IN LISTS root_entries)
+                    if(IS_DIRECTORY \"\${bin_dir}/\${entry}\")
+                        continue()
+                    endif()
+                    if(entry MATCHES \"^(clang-cl|clangd|lld-link)\\\\.exe$\")
+                        deploykit_move_runtime_entry(\"\${entry}\" \"tools/llvm\")
+                    elseif(entry MATCHES \"^Qt6.*\\\\.dll$\" OR
+                           entry MATCHES \"^(D3Dcompiler_47|dxcompiler|dxil|opengl32sw)\\\\.dll$\")
+                        deploykit_move_runtime_entry(\"\${entry}\" \"dll/qt\")
+                    elseif(entry MATCHES \"^vtk.*\\\\.dll$\")
+                        deploykit_move_runtime_entry(\"\${entry}\" \"dll/vtk\")
+                    elseif(entry MATCHES \"^(GoApi|GoPxLSdk|kApi)\\\\.dll$\")
+                        deploykit_move_runtime_entry(\"\${entry}\" \"dll/gopxl\")
+                    elseif(entry MATCHES \"^BaslerFgSdkLogging\\\\.properties$\" OR
+                            entry MATCHES \"^(BaslerCLProtocol|CLAllSerial.*|CLProtocol.*|clsercom|clsersis|common-logging-.*|fglib5|haprt|iolibrt|libcrypto.*|libssl.*|logging-context|siso.*|SiSo.*)\\\\.(dll|xml)$\" OR
+                            entry MATCHES \"^(FirmwareUpdate|GCBase|GenApi|GenCP|Log|log4cpp|MathParser|NodeMapData|XmlParser)_MD_VC142_v3_5_Basler_pylon_v1\\\\.dll$\" OR
+                           entry MATCHES \"^Producer(CL|CXP)\\\\.cti$\")
+                        deploykit_move_runtime_entry(\"\${entry}\" \"dll/framegrabber/bin\")
+                    elseif(entry MATCHES \"^(Basler.*|CL.*|FirmwareUpdate_.*|GCBase_.*|GenApi_.*|gxapi_.*|log4cpp_.*|Log_.*|MathParser_.*|NodeMapData_.*|Producer(BaslerBlazePylon|GEV|U3V).*|Pylon.*|uxapi_.*|uxtopapi_.*|XmlParser_.*)\\\\.(dll|exe|cti|sig|md|zip)$\")
+                        deploykit_move_runtime_entry(\"\${entry}\" \"dll/pylon\")
+                    elseif(entry MATCHES \"\\\\.dll$\")
+                        deploykit_move_runtime_entry(\"\${entry}\" \"dll/common\")
+                    endif()
+                endforeach()
+                file(WRITE \"\${bin_dir}/qt.conf\"
+                    \"[Paths]\\nPrefix = ../dll/qt\\nPlugins = plugins\\n\")
+            ")
+        endif()
 
     else()
         # 3. Linux Deployment (Standard RPATH layout)
@@ -1080,11 +1217,15 @@ macro(deploykit_configure_bundling TARGET_NAME)
         ")
     endif()
 
-    # Building the target should also refresh the bundle output.
-    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}" --config "$<CONFIG>"
-        COMMENT "[DeployKit] Bundling and installing ${TARGET_NAME} to ${CMAKE_INSTALL_PREFIX}..."
-    )
+    # A root launcher must be built before the bundle can be installed. Keep
+    # automatic post-build bundling for the traditional single-executable
+    # layout, and use the explicit bundle target for the launcher layout.
+    if(NOT DEPLOY_WINDOWS_LAUNCHER_TARGET)
+        add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}" --config "$<CONFIG>"
+            COMMENT "[DeployKit] Bundling and installing ${TARGET_NAME} to ${CMAKE_INSTALL_PREFIX}..."
+        )
+    endif()
 
     # Keep an explicit bundle target for manual re-bundling.
     add_custom_target(Bundle${TARGET_NAME}
@@ -1092,6 +1233,9 @@ macro(deploykit_configure_bundling TARGET_NAME)
         COMMENT "[DeployKit] Re-bundling and installing ${TARGET_NAME} to ${CMAKE_INSTALL_PREFIX}..."
     )
     add_dependencies(Bundle${TARGET_NAME} ${TARGET_NAME})
+    if(DEPLOY_WINDOWS_LAUNCHER_TARGET)
+        add_dependencies(Bundle${TARGET_NAME} ${DEPLOY_WINDOWS_LAUNCHER_TARGET})
+    endif()
 
     # 4. CPack Configuration
     if(NOT DEFINED CPACK_PACKAGE_NAME)
@@ -1215,11 +1359,15 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
             # Post-install auto-start configuration (Run on Finish page)
             # Use powershell Start-Process with -WorkingDirectory to force correct working directory (resolves DLL loading issues and forward slash path space errors)
             set(CPACK_IFW_PACKAGE_RUN_PROGRAM "powershell.exe")
-            set(CPACK_IFW_PACKAGE_RUN_PROGRAM_ARGUMENTS "-NoProfile" "-Command" "Start-Process -FilePath '@TargetDir@/${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}' -WorkingDirectory '@TargetDir@'")
+            set(deploykit_launch_output_name "${deploykit_target_output_name}")
+            if(deploykit_windows_launcher_output_name)
+                set(deploykit_launch_output_name "${deploykit_windows_launcher_output_name}")
+            endif()
+            set(CPACK_IFW_PACKAGE_RUN_PROGRAM_ARGUMENTS "-NoProfile" "-Command" "Start-Process -FilePath '@TargetDir@/${deploykit_launch_output_name}${CMAKE_EXECUTABLE_SUFFIX}' -WorkingDirectory '@TargetDir@'")
             set(CPACK_IFW_PACKAGE_RUN_PROGRAM_DESCRIPTION "Run Basler Playground")
 
             # Set variables for shortcut script template
-            set(DEPLOYKIT_TARGET_EXE "${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
+            set(DEPLOYKIT_TARGET_EXE "${deploykit_launch_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
             set(DEPLOYKIT_TARGET_NAME "Basler Playground")
             # Preserve QtIFW runtime placeholders through configure_file(@ONLY).
             set(DEPLOYKIT_IFW_TARGET_DIR "@TargetDir@")
@@ -1260,7 +1408,7 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
                 set(DEPLOYKIT_WINDOWS_SDK_COMPONENT_ID "${DEPLOY_VS_BUILD_TOOLS_SDK_COMPONENT}")
 
                 install(FILES "${deploykit_vs_bootstrapper}"
-                    DESTINATION ${deploykit_bundle_destination}
+                    DESTINATION ${deploykit_bundle_destination}/tools/installer
                     COMPONENT Unspecified
                 )
 

@@ -42,11 +42,11 @@ Component.prototype.createOperations = function() {
         return;
 
     component.addElevatedOperation("Execute",
-        "@DEPLOYKIT_IFW_TARGET_DIR@/vs_BuildTools.exe",
+        "@DEPLOYKIT_IFW_TARGET_DIR@/tools/installer/vs_BuildTools.exe",
         "--passive", "--norestart", "--wait", "--nocache",
         "--add", "@DEPLOYKIT_WINDOWS_SDK_COMPONENT_ID@",
         "UNDOEXECUTE=",
-        "workingdirectory=@DEPLOYKIT_IFW_TARGET_DIR@",
+        "workingdirectory=@DEPLOYKIT_IFW_TARGET_DIR@/tools/installer",
         "allowedexitcodes=0,3010",
         "errormessage=Windows SDK installation failed. You can rerun vs_BuildTools.exe manually.");
 }
