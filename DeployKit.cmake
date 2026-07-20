@@ -60,13 +60,27 @@ macro(deploykit_configure_bundling TARGET_NAME)
         VS_BUILD_TOOLS_MSVC_COMPONENT
         VS_BUILD_TOOLS_SDK_COMPONENT
         WINDOWS_LAUNCHER_TARGET
+        WINDOWS_PACKAGE_FORMAT
     )
     set(multiValueArgs EXTRA_LIBS EXTRA_FILES LIBPATHS ANALYZE_BINARIES MACOS_TRANSIENT_FILES)
     cmake_parse_arguments(DEPLOY "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
+    if(WIN32)
+        if(NOT DEPLOY_WINDOWS_PACKAGE_FORMAT)
+            set(DEPLOY_WINDOWS_PACKAGE_FORMAT "IFW")
+        endif()
+        string(TOUPPER "${DEPLOY_WINDOWS_PACKAGE_FORMAT}" DEPLOY_WINDOWS_PACKAGE_FORMAT)
+        set(_deploykit_windows_package_formats IFW NSIS NONE)
+        if(NOT DEPLOY_WINDOWS_PACKAGE_FORMAT IN_LIST _deploykit_windows_package_formats)
+            message(FATAL_ERROR
+                "[DeployKit] WINDOWS_PACKAGE_FORMAT must be IFW, NSIS, or NONE."
+            )
+        endif()
+    endif()
+
     message(STATUS "[DeployKit] Configuring deployment for target: ${TARGET_NAME}")
 
-    if(CPACK_IFW_ROOT)
+    if(WIN32 AND DEPLOY_WINDOWS_PACKAGE_FORMAT STREQUAL "IFW" AND CPACK_IFW_ROOT)
         file(TO_CMAKE_PATH "${CPACK_IFW_ROOT}" deploykit_ifw_root_normalized)
         set(CPACK_IFW_ROOT "${deploykit_ifw_root_normalized}" CACHE PATH
             "Qt Installer Framework root used by CPack IFW." FORCE)
@@ -96,7 +110,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
     endif()
 
     set(deploykit_ifw_components "")
-    if(WIN32 AND DEPLOY_IFW_COMPONENT_MANIFEST)
+    if(WIN32 AND DEPLOY_WINDOWS_PACKAGE_FORMAT STREQUAL "IFW" AND DEPLOY_IFW_COMPONENT_MANIFEST)
         if(NOT EXISTS "${DEPLOY_IFW_COMPONENT_MANIFEST}")
             message(FATAL_ERROR
                 "[DeployKit] IFW component manifest not found: ${DEPLOY_IFW_COMPONENT_MANIFEST}"
@@ -1299,6 +1313,18 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
             set(CPACK_INSTALL_SCRIPTS "${deploykit_macos_cpack_install_script}")
         endif()
     elseif(WIN32)
+        set(deploykit_vs_bootstrapper "${DEPLOY_VS_BUILD_TOOLS_BOOTSTRAPPER}")
+        if(DEPLOY_WINDOWS_PACKAGE_FORMAT STREQUAL "NONE")
+            # Inno Setup compiles the already staged bundle directly. Keep the
+            # optional Build Tools bootstrapper in that bundle so its setup
+            # script can preserve the existing prerequisite contract.
+            if(EXISTS "${deploykit_vs_bootstrapper}")
+                install(FILES "${deploykit_vs_bootstrapper}"
+                    DESTINATION ${deploykit_bundle_destination}/tools/installer
+                    COMPONENT Unspecified
+                )
+            endif()
+        elseif(DEPLOY_WINDOWS_PACKAGE_FORMAT STREQUAL "IFW")
         if(NOT DEFINED CPACK_GENERATOR)
             set(CPACK_GENERATOR "IFW")
         endif()
@@ -1402,7 +1428,6 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
             endif()
 
             # Generate separate prerequisite scripts when the Build Tools bootstrapper is available.
-            set(deploykit_vs_bootstrapper "${DEPLOY_VS_BUILD_TOOLS_BOOTSTRAPPER}")
             if(EXISTS "${deploykit_vs_bootstrapper}")
                 set(DEPLOYKIT_MSVC_COMPONENT_ID "${DEPLOY_VS_BUILD_TOOLS_MSVC_COMPONENT}")
                 set(DEPLOYKIT_WINDOWS_SDK_COMPONENT_ID "${DEPLOY_VS_BUILD_TOOLS_SDK_COMPONENT}")
@@ -1471,6 +1496,7 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
                 ")
             endif()
         endif()
+        endif()
     else()
         set(CPACK_GENERATOR "TGZ")
         set(CPACK_SYSTEM_NAME "linux")
@@ -1479,7 +1505,7 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
 
     # Define and configure components before including CPack so their metadata is
     # serialized into CPackConfig.cmake.
-    if(WIN32 AND (NOT DEFINED CPACK_GENERATOR OR CPACK_GENERATOR STREQUAL "IFW"))
+    if(WIN32 AND DEPLOY_WINDOWS_PACKAGE_FORMAT STREQUAL "IFW")
         include(CPackComponent)
         include(CPackIFW)
         set(CPACK_COMPONENTS_GROUPING IGNORE)
@@ -1594,5 +1620,7 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
         endif()
     endif()
 
-    include(CPack)
+    if(NOT (WIN32 AND DEPLOY_WINDOWS_PACKAGE_FORMAT STREQUAL "NONE"))
+        include(CPack)
+    endif()
 endmacro()
