@@ -57,7 +57,6 @@ macro(deploykit_configure_bundling TARGET_NAME)
         DESTINATION
         IFW_COMPONENT_MANIFEST
         VS_BUILD_TOOLS_BOOTSTRAPPER
-        VC_REDIST_BOOTSTRAPPER
         VS_BUILD_TOOLS_MSVC_COMPONENT
         VS_BUILD_TOOLS_SDK_COMPONENT
         WINDOWS_LAUNCHER_TARGET
@@ -1315,7 +1314,6 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
         endif()
    elseif(WIN32)
        set(deploykit_vs_bootstrapper "${DEPLOY_VS_BUILD_TOOLS_BOOTSTRAPPER}")
-        set(deploykit_vc_redist_bootstrapper "${DEPLOY_VC_REDIST_BOOTSTRAPPER}")
        if(DEPLOY_WINDOWS_PACKAGE_FORMAT STREQUAL "NONE")
             # Inno Setup compiles the already staged bundle directly. Keep the
             # optional Build Tools bootstrapper in that bundle so its setup
@@ -1326,12 +1324,6 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
                    COMPONENT Unspecified
                )
            endif()
-            if(EXISTS "${deploykit_vc_redist_bootstrapper}")
-                install(FILES "${deploykit_vc_redist_bootstrapper}"
-                    DESTINATION ${deploykit_bundle_destination}/tools/installer
-                    COMPONENT Unspecified
-                )
-            endif()
         elseif(DEPLOY_WINDOWS_PACKAGE_FORMAT STREQUAL "IFW")
         if(NOT DEFINED CPACK_GENERATOR)
             set(CPACK_GENERATOR "IFW")
