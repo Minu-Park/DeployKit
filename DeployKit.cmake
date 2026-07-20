@@ -57,6 +57,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
         DESTINATION
         IFW_COMPONENT_MANIFEST
         VS_BUILD_TOOLS_BOOTSTRAPPER
+        VC_REDIST_BOOTSTRAPPER
         VS_BUILD_TOOLS_MSVC_COMPONENT
         VS_BUILD_TOOLS_SDK_COMPONENT
         WINDOWS_LAUNCHER_TARGET
@@ -1312,14 +1313,21 @@ file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\
 ")
             set(CPACK_INSTALL_SCRIPTS "${deploykit_macos_cpack_install_script}")
         endif()
-    elseif(WIN32)
-        set(deploykit_vs_bootstrapper "${DEPLOY_VS_BUILD_TOOLS_BOOTSTRAPPER}")
-        if(DEPLOY_WINDOWS_PACKAGE_FORMAT STREQUAL "NONE")
+   elseif(WIN32)
+       set(deploykit_vs_bootstrapper "${DEPLOY_VS_BUILD_TOOLS_BOOTSTRAPPER}")
+        set(deploykit_vc_redist_bootstrapper "${DEPLOY_VC_REDIST_BOOTSTRAPPER}")
+       if(DEPLOY_WINDOWS_PACKAGE_FORMAT STREQUAL "NONE")
             # Inno Setup compiles the already staged bundle directly. Keep the
             # optional Build Tools bootstrapper in that bundle so its setup
             # script can preserve the existing prerequisite contract.
-            if(EXISTS "${deploykit_vs_bootstrapper}")
-                install(FILES "${deploykit_vs_bootstrapper}"
+           if(EXISTS "${deploykit_vs_bootstrapper}")
+               install(FILES "${deploykit_vs_bootstrapper}"
+                   DESTINATION ${deploykit_bundle_destination}/tools/installer
+                   COMPONENT Unspecified
+               )
+           endif()
+            if(EXISTS "${deploykit_vc_redist_bootstrapper}")
+                install(FILES "${deploykit_vc_redist_bootstrapper}"
                     DESTINATION ${deploykit_bundle_destination}/tools/installer
                     COMPONENT Unspecified
                 )
