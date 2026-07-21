@@ -62,7 +62,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
         WINDOWS_LAUNCHER_TARGET
         WINDOWS_PACKAGE_FORMAT
     )
-    set(multiValueArgs EXTRA_LIBS EXTRA_FILES LIBPATHS ANALYZE_BINARIES MACOS_TRANSIENT_FILES)
+    set(multiValueArgs EXTRA_LIBS EXTRA_FILES LIBPATHS ANALYZE_BINARIES MACOS_PLUGIN_TARGETS MACOS_TRANSIENT_FILES)
     cmake_parse_arguments(DEPLOY "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     if(WIN32)
@@ -262,8 +262,30 @@ macro(deploykit_configure_bundling TARGET_NAME)
             RUNTIME DESTINATION ${deploykit_bundle_destination}/bin
         )
 
-        # Copy extra libraries to the bundle Frameworks directory
+        # Device plugins are part of the macOS application bundle. Install
+        # them before deployment so dependency collection and code signing
+        # cover their Mach-O dependencies as well as the main executable.
         set(deploykit_macos_analyze_binaries "")
+        foreach(plugin_target IN LISTS DEPLOY_MACOS_PLUGIN_TARGETS)
+            if(NOT TARGET ${plugin_target})
+                message(FATAL_ERROR "[DeployKit] MACOS_PLUGIN_TARGETS entry is not a target: ${plugin_target}")
+            endif()
+            get_target_property(plugin_destination ${plugin_target}
+                DEPLOYKIT_MACOS_PLUGIN_DESTINATION)
+            if(NOT plugin_destination)
+                message(FATAL_ERROR
+                    "[DeployKit] ${plugin_target} needs DEPLOYKIT_MACOS_PLUGIN_DESTINATION.")
+            endif()
+            install(TARGETS ${plugin_target}
+                LIBRARY DESTINATION
+                    ${deploykit_bundle_destination}/${TARGET_NAME}.app/Contents/PlugIns/${plugin_destination}
+            )
+            list(APPEND deploykit_macos_analyze_binaries
+                "\${bundle_prefix}/${TARGET_NAME}.app/Contents/PlugIns/${plugin_destination}/$<TARGET_FILE_NAME:${plugin_target}>"
+            )
+        endforeach()
+
+        # Copy extra libraries to the bundle Frameworks directory
         foreach(lib ${DEPLOY_EXTRA_LIBS})
             if(TARGET ${lib})
                 install(TARGETS ${lib}
