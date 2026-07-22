@@ -1330,7 +1330,26 @@ if(deploykit_source_app STREQUAL \"\")
 endif()
 
 file(REMOVE_RECURSE \"\${deploykit_stage_prefix}/\${deploykit_target_output_name}.app\")
-file(COPY \"\${deploykit_source_app}\" DESTINATION \"\${deploykit_stage_prefix}\")
+execute_process(
+    COMMAND ditto --norsrc \"\${deploykit_source_app}\" \"\${deploykit_stage_prefix}/\${deploykit_target_output_name}.app\"
+    RESULT_VARIABLE deploykit_stage_copy_result
+    ERROR_VARIABLE deploykit_stage_copy_error
+)
+if(NOT deploykit_stage_copy_result EQUAL 0)
+    message(FATAL_ERROR \"[DeployKit] Failed to stage macOS DMG app: \${deploykit_stage_copy_error}\")
+endif()
+
+execute_process(COMMAND xattr -rc \"\${deploykit_stage_prefix}/\${deploykit_target_output_name}.app\" ERROR_QUIET)
+if(${deploykit_macos_codesign_condition})
+    execute_process(
+        COMMAND codesign --verify --deep --strict \"\${deploykit_stage_prefix}/\${deploykit_target_output_name}.app\"
+        RESULT_VARIABLE deploykit_stage_verify_result
+        ERROR_VARIABLE deploykit_stage_verify_error
+    )
+    if(NOT deploykit_stage_verify_result EQUAL 0)
+        message(FATAL_ERROR \"[DeployKit] Staged macOS DMG app signature verification failed: \${deploykit_stage_verify_error}\")
+    endif()
+endif()
 ")
             set(CPACK_INSTALL_SCRIPTS "${deploykit_macos_cpack_install_script}")
         endif()
