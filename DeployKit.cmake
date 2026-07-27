@@ -320,6 +320,14 @@ macro(deploykit_configure_bundling TARGET_NAME)
                     DESTINATION ${deploykit_bundle_destination}/${TARGET_NAME}.app/Contents/Frameworks
                     USE_SOURCE_PERMISSIONS
                 )
+                get_filename_component(file_name "${file}" NAME)
+                if(file_name MATCHES "^(.+)\\.framework$")
+                    # A copied framework can have dependencies of its own even
+                    # when no app target links to its top-level executable.
+                    list(APPEND deploykit_macos_analyze_binaries
+                        "\${bundle_prefix}/${TARGET_NAME}.app/Contents/Frameworks/${file_name}/${CMAKE_MATCH_1}"
+                    )
+                endif()
             elseif(EXISTS "${file}")
                 get_filename_component(real_file "${file}" REALPATH)
                 get_filename_component(file_name "${file}" NAME)

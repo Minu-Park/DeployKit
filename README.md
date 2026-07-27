@@ -26,7 +26,7 @@ By default, DeployKit preserves an existing bundle directory so unchanged files 
 
 - `LIBPATHS`: extra directories used by deployment tools and CMake runtime dependency scanning.
 - `EXTRA_LIBS`: optional CMake targets or absolute library files that are not discoverable from the main executable.
-- `EXTRA_FILES`: optional runtime files or directories copied into the platform runtime area.
+- `EXTRA_FILES`: optional runtime files or directories copied into the platform runtime area; macOS framework directories also have their top-level executable dependency-scanned.
 - `ANALYZE_BINARIES`: optional already-installed helper binaries to inspect during recursive dependency scanning.
 - `MACOSX_ICON`: parsed by the API but not implemented yet.
 - `IFW_COMPONENT_MANIFEST`: optional configured CMake manifest that partitions an already validated Windows bundle into independently versioned IFW components.
