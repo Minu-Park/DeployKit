@@ -28,6 +28,7 @@ By default, DeployKit preserves an existing bundle directory so unchanged files 
 - `EXTRA_LIBS`: optional CMake targets or absolute library files that are not discoverable from the main executable.
 - `EXTRA_FILES`: optional runtime files or directories copied into the platform runtime area; macOS framework directories also have their top-level executable dependency-scanned.
 - `ANALYZE_BINARIES`: optional already-installed helper binaries to inspect during recursive dependency scanning.
+- `MACOS_PLUGIN_TARGETS`: optional module targets installed under `Contents/PlugIns`. A target may provide `DEPLOYKIT_MACOS_PLUGIN_DESTINATION` and, when package metadata is needed, both `DEPLOYKIT_MACOS_PLUGIN_MANIFEST` and `DEPLOYKIT_MACOS_PLUGIN_ICON`; DeployKit installs all three before final signing.
 - `MACOSX_ICON`: parsed by the API but not implemented yet.
 - `IFW_COMPONENT_MANIFEST`: optional configured CMake manifest that partitions an already validated Windows bundle into independently versioned IFW components.
 - `WINDOWS_PACKAGE_FORMAT`: `IFW` (default), `NSIS`, or `NONE`. Use `NONE` when a host-owned installer such as Inno Setup consumes the staged bundle directly.
@@ -39,7 +40,7 @@ By default, DeployKit preserves an existing bundle directory so unchanged files 
 
 ## Platform Behavior
 
-- macOS: installs an ad-hoc signed standalone app bundle by default, runs `macdeployqt`, copies extra libraries into `Contents/Frameworks`, runs recursive dependency scanning, signs nested Mach-O files inside-out, and stages DragNDrop DMGs with only the `.app` at the image root. Set `DEPLOYKIT_MACOS_ADHOC_SIGNING=OFF` only for unsigned diagnostics; production distribution still needs appropriate Developer ID signing and notarization.
+- macOS: installs an ad-hoc signed standalone app bundle by default, runs `macdeployqt`, copies extra libraries into `Contents/Frameworks`, runs recursive dependency scanning, signs the finished app, and stages DragNDrop DMGs with only the `.app` at the image root. DMG staging preserves code-signature extended attributes while removing Finder/resource-fork metadata. Set `DEPLOYKIT_MACOS_ADHOC_SIGNING=OFF` only for unsigned diagnostics; production distribution still needs appropriate Developer ID signing and notarization.
 - Windows: installs each configuration under its own bundle subdirectory, copies extra libraries next to the executable, runs `windeployqt` when available, and recursively copies non-system runtime dependencies. `WINDOWS_PACKAGE_FORMAT=NONE` stops after bundle staging while preserving an optional Build Tools bootstrapper at `tools/installer`; the host installer owns prerequisite UI and product registration. Debug bundles skip release-only VTK Qt runtimes.
 - The main IFW component refreshes the global ordered `ProductVersion` and updates the matching Windows uninstall `DisplayVersion` from `DEPLOYKIT_PRODUCT_DISPLAY_VERSION` plus `EstimatedSize` after extraction, so prerelease labels and installed footprint remain accurate.
 - A Windows IFW manifest defines `DEPLOYKIT_IFW_COMPONENTS`, `DEPLOYKIT_IFW_DEFAULT_COMPONENT`, per-component metadata, and non-overlapping relative-path regular expressions. Unmatched files belong to the default component; overlapping ownership fails packaging. `DEPLOYKIT_IFW_UPDATE_COMPONENTS` is written to `ifw-update-components.txt` for release tooling.

@@ -276,10 +276,36 @@ macro(deploykit_configure_bundling TARGET_NAME)
                 message(FATAL_ERROR
                     "[DeployKit] ${plugin_target} needs DEPLOYKIT_MACOS_PLUGIN_DESTINATION.")
             endif()
+            get_target_property(plugin_manifest ${plugin_target}
+                DEPLOYKIT_MACOS_PLUGIN_MANIFEST)
+            get_target_property(plugin_icon ${plugin_target}
+                DEPLOYKIT_MACOS_PLUGIN_ICON)
+            if(plugin_manifest STREQUAL "plugin_manifest-NOTFOUND")
+                set(plugin_manifest "")
+            endif()
+            if(plugin_icon STREQUAL "plugin_icon-NOTFOUND")
+                set(plugin_icon "")
+            endif()
+            if((plugin_manifest AND NOT plugin_icon) OR (plugin_icon AND NOT plugin_manifest))
+                message(FATAL_ERROR
+                    "[DeployKit] ${plugin_target} must provide both "
+                    "DEPLOYKIT_MACOS_PLUGIN_MANIFEST and DEPLOYKIT_MACOS_PLUGIN_ICON.")
+            endif()
             install(TARGETS ${plugin_target}
                 LIBRARY DESTINATION
                     ${deploykit_bundle_destination}/${TARGET_NAME}.app/Contents/PlugIns/${plugin_destination}
             )
+            if(plugin_manifest)
+                install(FILES "${plugin_manifest}"
+                    DESTINATION
+                        ${deploykit_bundle_destination}/${TARGET_NAME}.app/Contents/PlugIns/${plugin_destination}
+                )
+                install(FILES "${plugin_icon}"
+                    DESTINATION
+                        ${deploykit_bundle_destination}/${TARGET_NAME}.app/Contents/PlugIns/${plugin_destination}
+                    RENAME "icon.png"
+                )
+            endif()
             list(APPEND deploykit_macos_analyze_binaries
                 "\${bundle_prefix}/${TARGET_NAME}.app/Contents/PlugIns/${plugin_destination}/$<TARGET_FILE_NAME:${plugin_target}>"
             )
@@ -468,12 +494,26 @@ macro(deploykit_configure_bundling TARGET_NAME)
                     endforeach()
                     
                     foreach(dep \${unresolved_deps})
-                        # Extract the filename from rpath reference
-                        string(REGEX REPLACE \"^@rpath/\" \"\" dep_name \"\${dep}\")
+                        # Resolve by filename first. Dependencies already
+                        # staged by macdeployqt live in the bundle Frameworks
+                        # directory and need not be copied again.
+                        get_filename_component(dep_name \"\${dep}\" NAME)
+                        string(REGEX REPLACE \"^@rpath/\" \"\"
+                            bundle_relative_dependency \"\${dep}\")
+                        if(bundle_relative_dependency STREQUAL \"\${dep}\")
+                            set(bundle_relative_dependency \"\${dep_name}\")
+                        endif()
+                        set(bundle_dependency
+                            \"\${bundle_prefix}/${TARGET_NAME}.app/Contents/Frameworks/\${bundle_relative_dependency}\")
                         
                         list(FIND copied_libs \"\${dep_name}\" idx)
                         if(idx EQUAL -1)
-                            # Search for this file name in our DEPLOY_LIBPATHS
+                            if(EXISTS \"\${bundle_dependency}\")
+                                list(APPEND copied_libs \"\${dep_name}\")
+                                continue()
+                            endif()
+
+                            # Search for this file name in our DEPLOY_LIBPATHS.
                             set(found_path \"\")
                             foreach(path ${DEPLOY_LIBPATHS})
                                 if(EXISTS \"\${path}/\${dep_name}\")
@@ -556,8 +596,6 @@ macro(deploykit_configure_bundling TARGET_NAME)
                 message(FATAL_ERROR \"[DeployKit] macdeployqt signing failed: \${_dk_sign_deploy_error}\")
             endif()
 
-            # macdeployqt signs the standard Qt layout. Deep ad-hoc signing
-            # then covers nested third-party Mach-O files such as pylon.
             execute_process(
                 COMMAND codesign --force --deep -s - \"\${_dk_tmp}\"
                 RESULT_VARIABLE codesign_res
@@ -575,6 +613,19 @@ macro(deploykit_configure_bundling TARGET_NAME)
                 endif()
                 file(REMOVE_RECURSE \"\${_dk_sign_source}\")
                 execute_process(COMMAND mv \"\${_dk_tmp}\" \"\${_dk_sign_source}\")
+                # Moving the signed app back into a file-provider directory can
+                # add Finder metadata after signing. Remove only that metadata;
+                # nested code-signature xattrs must remain intact.
+                execute_process(COMMAND xattr -dr com.apple.FinderInfo \"\${_dk_sign_source}\" ERROR_QUIET)
+                execute_process(COMMAND xattr -dr com.apple.ResourceFork \"\${_dk_sign_source}\" ERROR_QUIET)
+                execute_process(
+                    COMMAND codesign --verify --deep --strict \"\${_dk_sign_source}\"
+                    RESULT_VARIABLE _dk_source_verify_result
+                    ERROR_VARIABLE _dk_source_verify_error
+                )
+                if(NOT _dk_source_verify_result EQUAL 0)
+                    message(FATAL_ERROR \"[DeployKit] Installed app signature verification failed: \${_dk_source_verify_error}\")
+                endif()
                 message(STATUS \"[DeployKit] Ad-hoc codesign complete.\")
             else()
                 file(REMOVE_RECURSE \"\${_dk_tmp}\")
@@ -1339,7 +1390,7 @@ endif()
 
 file(REMOVE_RECURSE \"\${deploykit_stage_prefix}/\${deploykit_target_output_name}.app\")
 execute_process(
-    COMMAND ditto --norsrc \"\${deploykit_source_app}\" \"\${deploykit_stage_prefix}/\${deploykit_target_output_name}.app\"
+    COMMAND ditto \"\${deploykit_source_app}\" \"\${deploykit_stage_prefix}/\${deploykit_target_output_name}.app\"
     RESULT_VARIABLE deploykit_stage_copy_result
     ERROR_VARIABLE deploykit_stage_copy_error
 )
@@ -1347,7 +1398,10 @@ if(NOT deploykit_stage_copy_result EQUAL 0)
     message(FATAL_ERROR \"[DeployKit] Failed to stage macOS DMG app: \${deploykit_stage_copy_error}\")
 endif()
 
-execute_process(COMMAND xattr -rc \"\${deploykit_stage_prefix}/\${deploykit_target_output_name}.app\" ERROR_QUIET)
+# Preserve code-signature xattrs required by nested plugin bundles.  Strip
+# Finder/resource-fork metadata only; those are not part of the signature.
+execute_process(COMMAND xattr -dr com.apple.FinderInfo \"\${deploykit_stage_prefix}/\${deploykit_target_output_name}.app\" ERROR_QUIET)
+execute_process(COMMAND xattr -dr com.apple.ResourceFork \"\${deploykit_stage_prefix}/\${deploykit_target_output_name}.app\" ERROR_QUIET)
 if(${deploykit_macos_codesign_condition})
     execute_process(
         COMMAND codesign --verify --deep --strict \"\${deploykit_stage_prefix}/\${deploykit_target_output_name}.app\"
