@@ -1,12 +1,12 @@
 # DeployKit
 
-DeployKit is a reusable CMake deployment and bundling helper for Qt-based desktop applications.
+DeployKit is a CMake deployment and bundling helper for Qt-based desktop applications.
 
-It is intended to live as an independent project or submodule. A consuming project names the executable target, and DeployKit uses the built target plus runtime dependency scanning to create install and packaging targets for macOS, Windows, and Linux.
+The bundle staging paths are target-driven and can be consumed independently. The current Windows IFW generator is not yet fully reusable: it still embeds legacy product identity, URL, shortcut text, and component assumptions. Use `WINDOWS_PACKAGE_FORMAT=NONE` for a neutral staged bundle until those values become required consumer inputs.
 
 ## Current API
 
-Add DeployKit to the parent build, then include the module and configure bundling:
+Add DeployKit to the consumer build, then include the module and configure bundling:
 
 ```cmake
 add_subdirectory(path/to/DeployKit)
@@ -52,8 +52,9 @@ By default, DeployKit preserves an existing bundle directory so unchanged files 
 
 ## Current Limitations
 
+- The Windows IFW path embeds legacy product-specific metadata and one component identity. It must not be presented as a neutral installer generator until every product value is supplied by the consumer.
 - Product-specific files that are loaded dynamically without a binary link edge cannot be inferred from the CMake target graph.
-- Consumers must pass those product-specific dynamic assets through `EXTRA_FILES`; DeployKit should not hardcode SDK names such as Basler pylon or VTK.
+- Consumers must pass product-specific dynamic assets through `EXTRA_FILES`; DeployKit should not acquire new SDK- or renderer-specific knowledge.
 - Linux Qt plugin selection is fixed to a small default list.
 - Linux Qt plugin discovery depends on `Qt::qmake -query QT_INSTALL_PLUGINS` or known Qt CMake install layouts.
 - Linux bundling requires `patchelf`; DeployKit fails configuration if it is unavailable because copied ELF files must resolve through the bundled runtime layout.
@@ -61,6 +62,6 @@ By default, DeployKit preserves an existing bundle directory so unchanged files 
 - Automatic bundling runs after the configured target is built, so incremental builds can spend extra time in install/dependency scanning.
 - The module has no standalone test project yet.
 
-## Cleanup Direction
+## Required Hardening
 
-Before treating DeployKit as a general-purpose package, add a small standalone fixture project and make install layout, plugin selection, and automatic bundling opt-in settings.
+Before treating DeployKit as a general-purpose package, move IFW identity and component defaults to validated consumer inputs, add a small standalone fixture project, and make install layout, plugin selection, and automatic bundling opt-in settings.
