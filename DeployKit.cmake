@@ -65,6 +65,21 @@ macro(deploykit_configure_bundling TARGET_NAME)
     set(multiValueArgs EXTRA_LIBS EXTRA_FILES LIBPATHS ANALYZE_BINARIES MACOS_PLUGIN_TARGETS MACOS_TRANSIENT_FILES)
     cmake_parse_arguments(DEPLOY "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
+    # Keep the runtime-closure helpers in the build tree so generated install
+    # scripts remain self-contained and do not depend on the source checkout
+    # after configuration.
+    set(deploykit_runtime_signature_helper
+        "${CMAKE_BINARY_DIR}/CMakeFiles/DeployKitRuntimeSignature.cmake")
+    configure_file(
+        "${DEPLOYKIT_MODULE_DIR}/RuntimeSignature.cmake"
+        "${deploykit_runtime_signature_helper}"
+        COPYONLY
+    )
+    file(TO_CMAKE_PATH "${deploykit_runtime_signature_helper}"
+        deploykit_runtime_signature_helper_path)
+    set_property(GLOBAL PROPERTY DEPLOYKIT_RUNTIME_SIGNATURE_HELPER
+        "${deploykit_runtime_signature_helper_path}")
+
     if(WIN32)
         if(NOT DEPLOY_WINDOWS_PACKAGE_FORMAT)
             set(DEPLOY_WINDOWS_PACKAGE_FORMAT "IFW")
@@ -201,8 +216,10 @@ macro(deploykit_configure_bundling TARGET_NAME)
         if(NOT deploykit_windows_launcher_output_name)
             set(deploykit_windows_launcher_output_name "${DEPLOY_WINDOWS_LAUNCHER_TARGET}")
         endif()
-       set(deploykit_windows_runtime_destination "${deploykit_bundle_destination}/bin")
-   endif()
+        set_property(GLOBAL PROPERTY DEPLOYKIT_WINDOWS_LAUNCHER_OUTPUT_NAME
+            "${deploykit_windows_launcher_output_name}")
+        set(deploykit_windows_runtime_destination "${deploykit_bundle_destination}/bin")
+    endif()
     set(deploykit_bundle_core_relative_path
         "${deploykit_target_output_name}${CMAKE_EXECUTABLE_SUFFIX}")
     if(deploykit_windows_launcher_output_name)
@@ -698,6 +715,69 @@ macro(deploykit_configure_bundling TARGET_NAME)
             message(STATUS "[DeployKit] Found windeployqt: ${WINDEPLOYQT_PATH}")
         endif()
 
+        # dumpbin provides a cheap direct-import fingerprint. If it is not
+        # available, the install-time helper falls back to hashing the whole
+        # binary, preserving correctness at the cost of the fast path.
+        set(deploykit_runtime_import_tool "")
+        if(CMAKE_CXX_COMPILER)
+            get_filename_component(deploykit_compiler_directory
+                "${CMAKE_CXX_COMPILER}" DIRECTORY)
+            if(EXISTS "${deploykit_compiler_directory}/dumpbin.exe")
+                set(deploykit_runtime_import_tool
+                    "${deploykit_compiler_directory}/dumpbin.exe")
+            endif()
+        endif()
+        if(NOT deploykit_runtime_import_tool)
+            find_program(deploykit_runtime_import_tool
+                NAMES dumpbin.exe dumpbin
+            )
+        endif()
+        if(deploykit_runtime_import_tool)
+            file(TO_CMAKE_PATH "${deploykit_runtime_import_tool}"
+                deploykit_runtime_import_tool_path)
+            message(STATUS
+                "[DeployKit] Runtime import fingerprint tool: ${deploykit_runtime_import_tool_path}")
+        else()
+            set(deploykit_runtime_import_tool_path "")
+            message(WARNING
+                "[DeployKit] dumpbin not found; runtime analysis will use the full-binary fallback.")
+        endif()
+        set_property(GLOBAL PROPERTY DEPLOYKIT_RUNTIME_IMPORT_TOOL
+            "${deploykit_runtime_import_tool_path}")
+
+        # Runtime-shaped source files are fingerprinted so an SDK/Qt update
+        # invalidates the closure even when the imported DLL names are unchanged.
+        set(deploykit_runtime_signature_paths ${DEPLOY_LIBPATHS})
+        if(WINDEPLOYQT_PATH)
+            get_filename_component(deploykit_qt_bin_directory
+                "${WINDEPLOYQT_PATH}" DIRECTORY)
+            get_filename_component(deploykit_qt_root_directory
+                "${deploykit_qt_bin_directory}/.." ABSOLUTE)
+            list(APPEND deploykit_runtime_signature_paths
+                "${deploykit_qt_root_directory}")
+        endif()
+        foreach(deploykit_extra_file IN LISTS DEPLOY_EXTRA_FILES)
+            list(APPEND deploykit_runtime_signature_paths
+                "${deploykit_extra_file}")
+        endforeach()
+        list(REMOVE_DUPLICATES deploykit_runtime_signature_paths)
+        set(deploykit_runtime_signature_path_lines "")
+        foreach(deploykit_signature_path IN LISTS deploykit_runtime_signature_paths)
+            file(TO_CMAKE_PATH "${deploykit_signature_path}"
+                deploykit_signature_path_cmake)
+            string(REPLACE "\"" "\\\""
+                deploykit_signature_path_cmake "${deploykit_signature_path_cmake}")
+            string(APPEND deploykit_runtime_signature_path_lines
+                "                \"${deploykit_signature_path_cmake}\"\n")
+        endforeach()
+
+        get_filename_component(deploykit_runtime_signature_root
+            "${CMAKE_BINARY_DIR}/CMakeFiles/DeployKit/${TARGET_NAME}" ABSOLUTE)
+        file(TO_CMAKE_PATH "${deploykit_runtime_signature_root}"
+            deploykit_runtime_signature_root_path)
+        set_property(GLOBAL PROPERTY DEPLOYKIT_RUNTIME_SIGNATURE_ROOT
+            "${deploykit_runtime_signature_root_path}")
+
         find_program(VSWHERE_PATH vswhere
             HINTS "C:/Program Files (x86)/Microsoft Visual Studio/Installer"
                   "C:/Program Files/Microsoft Visual Studio/Installer"
@@ -775,41 +855,11 @@ macro(deploykit_configure_bundling TARGET_NAME)
             set(install_time_dest "${deploykit_windows_runtime_destination}")
         endif()
 
-        # Execute windeployqt as a post-install step
-        if(WINDEPLOYQT_PATH)
-            install(CODE "
-                if(NOT DEFINED ENV{VCINSTALLDIR} AND \"${VSWHERE_PATH}\")
-                    execute_process(
-                        COMMAND \"${VSWHERE_PATH}\" -latest -products * -property installationPath
-                        OUTPUT_VARIABLE vs_install_path
-                        OUTPUT_STRIP_TRAILING_WHITESPACE
-                    )
-                    if(vs_install_path)
-                        string(REPLACE \"/\" \"\\\\\" native_vc_dir \"\${vs_install_path}/VC/\")
-                        set(ENV{VCINSTALLDIR} \"\${native_vc_dir}\")
-                        message(STATUS \"[DeployKit] Auto-detected VCINSTALLDIR: \$ENV{VCINSTALLDIR}\")
-                    endif()
-                endif()
-
-                get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
-                set(dest_sub \"${install_time_dest}\")
-                if(dest_sub STREQUAL \"\" OR dest_sub STREQUAL \".\")
-                    set(bundle_prefix \"\${abs_prefix}\")
-                else()
-                    set(bundle_prefix \"\${abs_prefix}/\${dest_sub}\")
-                endif()
-                message(STATUS \"[DeployKit] Packaging: Running windeployqt on \${bundle_prefix}/${TARGET_NAME}.exe...\")
-                execute_process(
-                    COMMAND \"${WINDEPLOYQT_PATH}\" \"\${bundle_prefix}/${TARGET_NAME}.exe\" --no-translations --verbose=1
-                    RESULT_VARIABLE deploy_res
-                )
-                if(NOT deploy_res EQUAL 0)
-                    message(FATAL_ERROR \"[DeployKit] windeployqt failed with exit code: \${deploy_res}\")
-                endif()
-            ")
-        endif()
-
+        # Compute the deployment signature after target files have been copied.
+        # The ordinary install rules still run on every invocation; only the
+        # expensive tool and recursive closure passes are conditional.
         install(CODE "
+            include(\"${deploykit_runtime_signature_helper_path}\")
             get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
             set(dest_sub \"${install_time_dest}\")
             if(dest_sub STREQUAL \"\" OR dest_sub STREQUAL \".\")
@@ -817,78 +867,183 @@ macro(deploykit_configure_bundling TARGET_NAME)
             else()
                 set(bundle_prefix \"\${abs_prefix}/\${dest_sub}\")
             endif()
-            message(STATUS \"[DeployKit] Windows Packaging: Resolving runtime dependencies recursively...\")
-            if(POLICY CMP0207)
-                cmake_policy(SET CMP0207 NEW)
+            if(\"${deploykit_windows_launcher_output_name}\" STREQUAL \"\")
+                set(deploykit_bundle_root \"\${bundle_prefix}\")
+            else()
+                get_filename_component(deploykit_bundle_root \"\${bundle_prefix}/..\" ABSOLUTE)
             endif()
+            set(deploykit_core_executable \"\${bundle_prefix}/${TARGET_NAME}.exe\")
 
-            set(binaries_to_analyze \"\${bundle_prefix}/${TARGET_NAME}.exe\")
-            file(GLOB existing_bundle_dlls \"\${bundle_prefix}/*.dll\")
-            set(copied_libs \"\")
-            foreach(existing_bundle_dll \${existing_bundle_dlls})
-                get_filename_component(existing_bundle_name \"\${existing_bundle_dll}\" NAME)
-                list(APPEND copied_libs \"\${existing_bundle_name}\")
-            endforeach()
-
-            set(new_dependencies_found TRUE)
-            while(new_dependencies_found)
-                set(new_dependencies_found FALSE)
-
-                file(GET_RUNTIME_DEPENDENCIES
-                    EXECUTABLES \${binaries_to_analyze}
-                    RESOLVED_DEPENDENCIES_VAR resolved_deps
-                    UNRESOLVED_DEPENDENCIES_VAR unresolved_deps
-                    CONFLICTING_DEPENDENCIES_PREFIX conflicting_deps
-                    DIRECTORIES ${deploykit_runtime_dependency_directories}
+            set(runtime_signature_material
+                \"bundle-root=\${deploykit_bundle_root}\\n\"
+                \"schema=2\\n\"
+                \"target=${TARGET_NAME}\\n\"
+                \"configuration=\${CMAKE_INSTALL_CONFIG_NAME}\\n\"
+                \"windeployqt=${WINDEPLOYQT_PATH}\\n\"
+                \"import-tool=${deploykit_runtime_import_tool_path}\\n\"
+                \"extra-libs=${DEPLOY_EXTRA_LIBS}\\n\"
+                \"extra-files=${DEPLOY_EXTRA_FILES}\\n\"
+            )
+            deploykit_runtime_import_fingerprint(
+                \"${deploykit_runtime_import_tool_path}\"
+                \"\${deploykit_core_executable}\"
+                core_import_fingerprint
+            )
+            string(APPEND runtime_signature_material
+                \"core-import=\${core_import_fingerprint}\\n\")
+            deploykit_runtime_file_fingerprint(
+                \"${WINDEPLOYQT_PATH}\"
+                windeployqt_fingerprint
+            )
+            string(APPEND runtime_signature_material
+                \"windeployqt-file=\${windeployqt_fingerprint}\\n\")
+            set(runtime_signature_paths
+${deploykit_runtime_signature_path_lines})
+            list(REMOVE_DUPLICATES runtime_signature_paths)
+            foreach(signature_path IN LISTS runtime_signature_paths)
+                deploykit_runtime_file_fingerprint(
+                    \"\${signature_path}\"
+                    signature_path_fingerprint
                 )
+                string(APPEND runtime_signature_material
+                    \"source=\${signature_path}|\${signature_path_fingerprint}\\n\")
+            endforeach()
+            string(SHA256 deploykit_runtime_signature \"\${runtime_signature_material}\")
 
-                foreach(dep \${resolved_deps})
-                    file(TO_CMAKE_PATH \"\${dep}\" dep_cmake)
-                    string(TOLOWER \"\${dep_cmake}\" dep_lower)
-                    if(dep_lower MATCHES \"^[a-z]:/windows/\")
-                        continue()
-                    endif()
-
-                    get_filename_component(dep_name \"\${dep}\" NAME)
-                    if(dep_name MATCHES \"^Qt[0-9].*\\\\.dll$\")
-                        continue()
-                    endif()
-                    if(CMAKE_INSTALL_CONFIG_NAME MATCHES \"^[Dd][Ee][Bb][Uu][Gg]$\" AND
-                       dep_name MATCHES \"^vtkGUISupportQt-.*\\\\.dll$\")
-                        message(WARNING \"[DeployKit] Skipping Release VTK Qt runtime for Debug bundle: \${dep}. Build a Release bundle or provide a Debug VTK build for a standalone VTK Qt bundle.\")
-                        if(EXISTS \"\${bundle_prefix}/\${dep_name}\")
-                            file(REMOVE \"\${bundle_prefix}/\${dep_name}\")
-                        endif()
-                        list(APPEND copied_libs \"\${dep_name}\")
-                        continue()
-                    endif()
-
-                    list(FIND copied_libs \"\${dep_name}\" idx)
-                    if(idx EQUAL -1)
-                        message(STATUS \"[DeployKit] Copying dependency: \${dep}\")
-                        file(INSTALL DESTINATION \"\${bundle_prefix}\"
-                            TYPE SHARED_LIBRARY
-                            FILES \"\${dep}\"
+            set(runtime_signature_config \"\${CMAKE_INSTALL_CONFIG_NAME}\")
+            if(runtime_signature_config STREQUAL \"\")
+                set(runtime_signature_config \"Default\")
+            endif()
+            set(deploykit_runtime_signature_file
+                \"${deploykit_runtime_signature_root_path}/\${runtime_signature_config}.windows-runtime-signature\")
+            set(deploykit_core_dependency_file \"\${deploykit_runtime_signature_file}.core-dependencies\")
+            set(deploykit_runtime_scan_required TRUE)
+            deploykit_runtime_signature_is_current(
+                \"\${deploykit_runtime_signature_file}\"
+                \"\${deploykit_runtime_signature}\"
+                \"\${deploykit_bundle_root}\"
+                runtime_signature_current
+            )
+            if(runtime_signature_current AND NOT EXISTS \"\${deploykit_core_dependency_file}\")
+                set(runtime_signature_current FALSE)
+            endif()
+            if(runtime_signature_current)
+                set(deploykit_runtime_scan_required FALSE)
+                message(STATUS
+                    \"[DeployKit] Runtime dependency closure unchanged; skipping windeployqt and recursive scan.\")
+            else()
+                message(STATUS
+                    \"[DeployKit] Runtime dependency closure changed; refreshing windeployqt and recursive scan.\")
+                if(NOT \"${VSWHERE_PATH}\" STREQUAL \"\")
+                    if(NOT DEFINED ENV{VCINSTALLDIR})
+                        execute_process(
+                            COMMAND \"${VSWHERE_PATH}\" -latest -products * -property installationPath
+                            OUTPUT_VARIABLE vs_install_path
+                            OUTPUT_STRIP_TRAILING_WHITESPACE
                         )
-                        list(APPEND copied_libs \"\${dep_name}\")
-                        list(APPEND binaries_to_analyze \"\${bundle_prefix}/\${dep_name}\")
-                        set(new_dependencies_found TRUE)
+                        if(vs_install_path)
+                            string(REPLACE \"/\" \"\\\\\" native_vc_dir \"\${vs_install_path}/VC/\")
+                            set(ENV{VCINSTALLDIR} \"\${native_vc_dir}\")
+                            message(STATUS \"[DeployKit] Auto-detected VCINSTALLDIR: \$ENV{VCINSTALLDIR}\")
+                        endif()
                     endif()
+                endif()
+                if(NOT \"${WINDEPLOYQT_PATH}\" STREQUAL \"\")
+                    message(STATUS \"[DeployKit] Packaging: Running windeployqt on \${deploykit_core_executable}...\")
+                    execute_process(
+                        COMMAND \"${WINDEPLOYQT_PATH}\" \"\${deploykit_core_executable}\" --no-translations --verbose=1
+                        RESULT_VARIABLE deploy_res
+                    )
+                    if(NOT deploy_res EQUAL 0)
+                        message(FATAL_ERROR \"[DeployKit] windeployqt failed with exit code: \${deploy_res}\")
+                    endif()
+                endif()
+            endif()
+        ")
+
+        install(CODE "
+            if(deploykit_runtime_scan_required)
+                message(STATUS \"[DeployKit] Windows Packaging: Resolving runtime dependencies recursively...\")
+                if(POLICY CMP0207)
+                    cmake_policy(SET CMP0207 NEW)
+                endif()
+
+                set(binaries_to_analyze \"\${bundle_prefix}/${TARGET_NAME}.exe\")
+                file(GLOB existing_bundle_dlls \"\${bundle_prefix}/*.dll\")
+                set(copied_libs \"\")
+                set(core_dependency_names \"\")
+                foreach(existing_bundle_dll \${existing_bundle_dlls})
+                    get_filename_component(existing_bundle_name \"\${existing_bundle_dll}\" NAME)
+                    list(APPEND copied_libs \"\${existing_bundle_name}\")
                 endforeach()
 
-                foreach(dep \${unresolved_deps})
-                    get_filename_component(dep_name \"\${dep}\" NAME)
-                    if(dep_name MATCHES \"^api-ms-\" OR
-                       dep_name MATCHES \"^ext-ms-\" OR
-                       dep_name MATCHES \"^AzureAttest\" OR
-                       dep_name MATCHES \"^Hvsi\" OR
-                       dep_name MATCHES \"^PdmUtilities\\\\.dll\" OR
-                       dep_name MATCHES \"^wpaxholder\\\\.dll\")
-                        continue()
-                    endif()
-                    message(WARNING \"[DeployKit] Unresolved dependency not found in search paths: \${dep}\")
+                set(new_dependencies_found TRUE)
+                while(new_dependencies_found)
+                    set(new_dependencies_found FALSE)
+
+                    file(GET_RUNTIME_DEPENDENCIES
+                        EXECUTABLES \${binaries_to_analyze}
+                        RESOLVED_DEPENDENCIES_VAR resolved_deps
+                        UNRESOLVED_DEPENDENCIES_VAR unresolved_deps
+                        CONFLICTING_DEPENDENCIES_PREFIX conflicting_deps
+                        DIRECTORIES ${deploykit_runtime_dependency_directories}
+                    )
+
+                    foreach(dep \${resolved_deps})
+                        file(TO_CMAKE_PATH \"\${dep}\" dep_cmake)
+                        string(TOLOWER \"\${dep_cmake}\" dep_lower)
+                        if(dep_lower MATCHES \"^[a-z]:/windows/\")
+                            continue()
+                        endif()
+
+                        get_filename_component(dep_name \"\${dep}\" NAME)
+                        list(APPEND core_dependency_names \"\${dep_name}\")
+                        if(dep_name MATCHES \"^Qt[0-9].*\\\\.dll$\")
+                            continue()
+                        endif()
+                        if(CMAKE_INSTALL_CONFIG_NAME MATCHES \"^[Dd][Ee][Bb][Uu][Gg]$\" AND
+                           dep_name MATCHES \"^vtkGUISupportQt-.*\\\\.dll$\")
+                            message(WARNING \"[DeployKit] Skipping Release VTK Qt runtime for Debug bundle: \${dep}. Build a Release bundle or provide a Debug VTK build for a standalone VTK Qt bundle.\")
+                            if(EXISTS \"\${bundle_prefix}/\${dep_name}\")
+                                file(REMOVE \"\${bundle_prefix}/\${dep_name}\")
+                            endif()
+                            list(APPEND copied_libs \"\${dep_name}\")
+                            continue()
+                        endif()
+
+                        list(FIND copied_libs \"\${dep_name}\" idx)
+                        if(idx EQUAL -1)
+                            message(STATUS \"[DeployKit] Copying dependency: \${dep}\")
+                            file(INSTALL DESTINATION \"\${bundle_prefix}\"
+                                TYPE SHARED_LIBRARY
+                                FILES \"\${dep}\"
+                            )
+                            list(APPEND copied_libs \"\${dep_name}\")
+                            list(APPEND binaries_to_analyze \"\${bundle_prefix}/\${dep_name}\")
+                            set(new_dependencies_found TRUE)
+                        endif()
+                    endforeach()
+
+                    foreach(dep \${unresolved_deps})
+                        get_filename_component(dep_name \"\${dep}\" NAME)
+                        if(dep_name MATCHES \"^api-ms-\" OR
+                           dep_name MATCHES \"^ext-ms-\" OR
+                           dep_name MATCHES \"^AzureAttest\" OR
+                           dep_name MATCHES \"^Hvsi\" OR
+                           dep_name MATCHES \"^PdmUtilities\\\\.dll\" OR
+                           dep_name MATCHES \"^wpaxholder\\\\.dll\")
+                            continue()
+                        endif()
+                        message(WARNING \"[DeployKit] Unresolved dependency not found in search paths: \${dep}\")
+                    endforeach()
+                endwhile()
+
+                list(REMOVE_DUPLICATES core_dependency_names)
+                file(WRITE \"\${deploykit_core_dependency_file}\" \"\")
+                foreach(core_dependency_name IN LISTS core_dependency_names)
+                    file(APPEND \"\${deploykit_core_dependency_file}\" \"\${core_dependency_name}\\n\")
                 endforeach()
-            endwhile()
+            endif()
         ")
 
         if(DEPLOY_WINDOWS_LAUNCHER_TARGET)
@@ -978,6 +1133,32 @@ macro(deploykit_configure_bundling TARGET_NAME)
                     \"[Paths]\\nPrefix = ../dll/qt\\nPlugins = plugins\\n\")
             ")
         endif()
+
+        # Record the generic bundle layout after the DeployKit-owned move.
+        # Consumers that add later cleanup may overwrite this manifest once
+        # their final layout is complete.
+        install(CODE "
+            if(deploykit_runtime_scan_required)
+                set(runtime_manifest_paths \"\${deploykit_core_executable}\")
+                if(\"${deploykit_windows_launcher_output_name}\" STREQUAL \"\")
+                    list(APPEND runtime_manifest_paths \"\${deploykit_bundle_root}\")
+                else()
+                    list(APPEND runtime_manifest_paths
+                        \"\${deploykit_bundle_root}/${deploykit_windows_launcher_output_name}.exe\"
+                        \"\${deploykit_bundle_root}/bin\"
+                        \"\${deploykit_bundle_root}/dll\"
+                        \"\${deploykit_bundle_root}/tools\"
+                    )
+                endif()
+                deploykit_runtime_write_signature(
+                    \"\${deploykit_runtime_signature_file}\"
+                    \"\${deploykit_runtime_signature}\"
+                    \"\${deploykit_bundle_root}\"
+                    \"\${runtime_manifest_paths}\"
+                )
+                message(STATUS \"[DeployKit] Runtime dependency closure stamp updated.\")
+            endif()
+        ")
 
     else()
         # 3. Linux Deployment (Standard RPATH layout)
@@ -1600,6 +1781,7 @@ endif()
             endif()
         endif()
         endif()
+
     else()
         set(CPACK_GENERATOR "TGZ")
         set(CPACK_SYSTEM_NAME "linux")
