@@ -359,11 +359,45 @@ macro(deploykit_configure_bundling TARGET_NAME)
 
         foreach(file ${DEPLOY_EXTRA_FILES})
             if(IS_DIRECTORY "${file}")
-                install(DIRECTORY "${file}"
-                    DESTINATION ${deploykit_bundle_destination}/${TARGET_NAME}.app/Contents/Frameworks
-                    USE_SOURCE_PERMISSIONS
-                )
                 get_filename_component(file_name "${file}" NAME)
+                if(file_name MATCHES "^(.+)\\.framework$")
+                    # CMake's directory installer follows framework symlinks
+                    # and can flatten a versioned framework into an invalid
+                    # app/framework hybrid. macOS ditto preserves the
+                    # framework link topology and replaces stale payloads
+                    # before dependency collection and signing.
+                    install(CODE "
+                        get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
+                        set(deploykit_config_name \"\${CMAKE_INSTALL_CONFIG_NAME}\")
+                        if(deploykit_config_name STREQUAL \"\")
+                            set(bundle_prefix \"\${abs_prefix}\")
+                        else()
+                            set(bundle_prefix \"\${abs_prefix}/\${deploykit_config_name}\")
+                        endif()
+                        set(framework_destination \"\${bundle_prefix}/${TARGET_NAME}.app/Contents/Frameworks/${file_name}\")
+                        set(framework_staging \"\${framework_destination}.deploykit-staging\")
+                        file(MAKE_DIRECTORY \"\${bundle_prefix}/${TARGET_NAME}.app/Contents/Frameworks\")
+                        file(REMOVE_RECURSE \"\${framework_staging}\")
+                        execute_process(
+                            COMMAND ditto --norsrc \"${file}\" \"\${framework_staging}\"
+                            RESULT_VARIABLE framework_copy_result
+                            ERROR_VARIABLE framework_copy_error
+                        )
+                        if(NOT framework_copy_result EQUAL 0)
+                            file(REMOVE_RECURSE \"\${framework_staging}\")
+                            message(FATAL_ERROR
+                                \"[DeployKit] Failed to copy macOS framework ${file_name}: \${framework_copy_error}\"
+                            )
+                        endif()
+                        file(REMOVE_RECURSE \"\${framework_destination}\")
+                        file(RENAME \"\${framework_staging}\" \"\${framework_destination}\")
+                    ")
+                else()
+                    install(DIRECTORY "${file}"
+                        DESTINATION ${deploykit_bundle_destination}/${TARGET_NAME}.app/Contents/Frameworks
+                        USE_SOURCE_PERMISSIONS
+                    )
+                endif()
                 if(file_name MATCHES "^(.+)\\.framework$")
                     # A copied framework can have dependencies of its own even
                     # when no app target links to its top-level executable.
