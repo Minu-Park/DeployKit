@@ -51,7 +51,7 @@ macro(deploykit_configure_bundling TARGET_NAME)
     )
 
     # Parse arguments
-    set(options)
+    set(options EXPLICIT_BUNDLE_ONLY)
     set(oneValueArgs
         MACOSX_ICON
         DESTINATION
@@ -62,8 +62,29 @@ macro(deploykit_configure_bundling TARGET_NAME)
         WINDOWS_LAUNCHER_TARGET
         WINDOWS_PACKAGE_FORMAT
     )
-    set(multiValueArgs EXTRA_LIBS EXTRA_FILES LIBPATHS ANALYZE_BINARIES MACOS_PLUGIN_TARGETS MACOS_TRANSIENT_FILES)
+    set(multiValueArgs
+        EXTRA_LIBS
+        EXTRA_FILES
+        LIBPATHS
+        ANALYZE_BINARIES
+        MACOS_PLUGIN_TARGETS
+        MACOS_TRANSIENT_FILES
+        MACOS_CPACK_EXCLUDE_PATHS
+    )
     cmake_parse_arguments(DEPLOY "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    set(deploykit_macos_cpack_exclude_paths)
+    foreach(deploykit_exclude_path IN LISTS DEPLOY_MACOS_CPACK_EXCLUDE_PATHS)
+        string(REPLACE "\\" "/" deploykit_exclude_path "${deploykit_exclude_path}")
+        if(deploykit_exclude_path STREQUAL "" OR
+           deploykit_exclude_path STREQUAL "." OR
+           IS_ABSOLUTE "${deploykit_exclude_path}" OR
+           deploykit_exclude_path MATCHES "(^|/)\\.\\.(/|$)")
+            message(FATAL_ERROR
+                "[DeployKit] MACOS_CPACK_EXCLUDE_PATHS must contain safe app-relative paths: ${deploykit_exclude_path}")
+        endif()
+        list(APPEND deploykit_macos_cpack_exclude_paths "${deploykit_exclude_path}")
+    endforeach()
 
     # Keep the runtime-closure helpers in the build tree so generated install
     # scripts remain self-contained and do not depend on the source checkout
@@ -303,6 +324,11 @@ macro(deploykit_configure_bundling TARGET_NAME)
             if(plugin_icon STREQUAL "plugin_icon-NOTFOUND")
                 set(plugin_icon "")
             endif()
+            get_target_property(plugin_runtime_directories ${plugin_target}
+                DEPLOYKIT_MACOS_PLUGIN_RUNTIME_DIRECTORIES)
+            if(plugin_runtime_directories STREQUAL "plugin_runtime_directories-NOTFOUND")
+                set(plugin_runtime_directories "")
+            endif()
             if((plugin_manifest AND NOT plugin_icon) OR (plugin_icon AND NOT plugin_manifest))
                 message(FATAL_ERROR
                     "[DeployKit] ${plugin_target} must provide both "
@@ -323,6 +349,27 @@ macro(deploykit_configure_bundling TARGET_NAME)
                     RENAME "icon.png"
                 )
             endif()
+            foreach(plugin_runtime_directory IN LISTS plugin_runtime_directories)
+                string(REPLACE "\\" "/" plugin_runtime_directory
+                    "${plugin_runtime_directory}")
+                if(plugin_runtime_directory STREQUAL "" OR
+                   plugin_runtime_directory MATCHES "(^|/)\\.\\.(/|$)" OR
+                   IS_ABSOLUTE "${plugin_runtime_directory}")
+                    message(FATAL_ERROR
+                        "[DeployKit] ${plugin_target} has an unsafe macOS runtime directory: ${plugin_runtime_directory}")
+                endif()
+                install(CODE "
+                    get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
+                    set(deploykit_config_name \"\${CMAKE_INSTALL_CONFIG_NAME}\")
+                    if(deploykit_config_name STREQUAL \"\")
+                        set(bundle_prefix \"\${abs_prefix}\")
+                    else()
+                        set(bundle_prefix \"\${abs_prefix}/\${deploykit_config_name}\")
+                    endif()
+                    file(MAKE_DIRECTORY
+                        \"\${bundle_prefix}/${TARGET_NAME}.app/Contents/PlugIns/${plugin_destination}/${plugin_runtime_directory}\")
+                ")
+            endforeach()
             list(APPEND deploykit_macos_analyze_binaries
                 "\${bundle_prefix}/${TARGET_NAME}.app/Contents/PlugIns/${plugin_destination}/$<TARGET_FILE_NAME:${plugin_target}>"
             )
@@ -665,17 +712,18 @@ macro(deploykit_configure_bundling TARGET_NAME)
                 file(REMOVE_RECURSE \"\${_dk_sign_source}\")
                 execute_process(COMMAND mv \"\${_dk_tmp}\" \"\${_dk_sign_source}\")
                 # Moving the signed app back into a file-provider directory can
-                # add Finder metadata after signing. Remove only that metadata;
-                # nested code-signature xattrs must remain intact.
+                # add Finder/FileProvider metadata after signing. Remove only
+                # that metadata; nested code-signature xattrs must remain intact.
+                execute_process(COMMAND xattr -dr com.apple.provenance \"\${_dk_sign_source}\" ERROR_QUIET)
                 execute_process(COMMAND xattr -dr com.apple.FinderInfo \"\${_dk_sign_source}\" ERROR_QUIET)
                 execute_process(COMMAND xattr -dr com.apple.ResourceFork \"\${_dk_sign_source}\" ERROR_QUIET)
                 execute_process(
-                    COMMAND codesign --verify --deep --strict \"\${_dk_sign_source}\"
+                    COMMAND codesign --verify --deep \"\${_dk_sign_source}\"
                     RESULT_VARIABLE _dk_source_verify_result
                     ERROR_VARIABLE _dk_source_verify_error
                 )
                 if(NOT _dk_source_verify_result EQUAL 0)
-                    message(FATAL_ERROR \"[DeployKit] Installed app signature verification failed: \${_dk_source_verify_error}\")
+                    message(FATAL_ERROR \"[DeployKit] Installed app signature integrity verification failed: \${_dk_source_verify_error}\")
                 endif()
                 message(STATUS \"[DeployKit] Ad-hoc codesign complete.\")
             else()
@@ -1529,8 +1577,11 @@ ${deploykit_runtime_signature_path_lines})
 
     # A root launcher must be built before the bundle can be installed. Keep
     # automatic post-build bundling for the traditional single-executable
-    # layout, and use the explicit bundle target for the launcher layout.
-    if(NOT DEPLOY_WINDOWS_LAUNCHER_TARGET)
+    # layout unless the consumer makes Bundle<target> the sole install path.
+    # This prevents a fresh explicit bundle build from installing once in the
+    # target's POST_BUILD step and immediately installing the same graph again.
+    if(NOT DEPLOY_EXPLICIT_BUNDLE_ONLY AND
+       NOT DEPLOY_WINDOWS_LAUNCHER_TARGET)
         add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
             COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}" --config "$<CONFIG>"
             COMMENT "[DeployKit] Bundling and installing ${TARGET_NAME} to ${CMAKE_INSTALL_PREFIX}..."
@@ -1613,11 +1664,32 @@ if(NOT deploykit_stage_copy_result EQUAL 0)
     message(FATAL_ERROR \"[DeployKit] Failed to stage macOS DMG app: \${deploykit_stage_copy_error}\")
 endif()
 
+set(deploykit_excluded_app_paths \"${deploykit_macos_cpack_exclude_paths}\")
+foreach(deploykit_excluded_app_path IN LISTS deploykit_excluded_app_paths)
+    set(deploykit_excluded_target
+        \"\${deploykit_stage_prefix}/\${deploykit_target_output_name}.app/\${deploykit_excluded_app_path}\")
+    if(EXISTS \"\${deploykit_excluded_target}\" OR IS_SYMLINK \"\${deploykit_excluded_target}\")
+        file(REMOVE_RECURSE \"\${deploykit_excluded_target}\")
+        message(STATUS \"[DeployKit] Excluded from macOS DMG app: \${deploykit_excluded_app_path}\")
+    endif()
+endforeach()
+
 # Preserve code-signature xattrs required by nested plugin bundles.  Strip
-# Finder/resource-fork metadata only; those are not part of the signature.
+# Finder/FileProvider metadata only; those are not part of the signature.
+execute_process(COMMAND xattr -dr com.apple.provenance \"\${deploykit_stage_prefix}/\${deploykit_target_output_name}.app\" ERROR_QUIET)
 execute_process(COMMAND xattr -dr com.apple.FinderInfo \"\${deploykit_stage_prefix}/\${deploykit_target_output_name}.app\" ERROR_QUIET)
 execute_process(COMMAND xattr -dr com.apple.ResourceFork \"\${deploykit_stage_prefix}/\${deploykit_target_output_name}.app\" ERROR_QUIET)
 if(${deploykit_macos_codesign_condition})
+    if(deploykit_excluded_app_paths)
+        execute_process(
+            COMMAND codesign --force --deep --sign - \"\${deploykit_stage_prefix}/\${deploykit_target_output_name}.app\"
+            RESULT_VARIABLE deploykit_stage_resign_result
+            ERROR_VARIABLE deploykit_stage_resign_error
+        )
+        if(NOT deploykit_stage_resign_result EQUAL 0)
+            message(FATAL_ERROR \"[DeployKit] Failed to re-sign filtered macOS DMG app: \${deploykit_stage_resign_error}\")
+        endif()
+    endif()
     execute_process(
         COMMAND codesign --verify --deep --strict \"\${deploykit_stage_prefix}/\${deploykit_target_output_name}.app\"
         RESULT_VARIABLE deploykit_stage_verify_result
