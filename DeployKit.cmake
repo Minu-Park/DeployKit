@@ -300,9 +300,8 @@ macro(deploykit_configure_bundling TARGET_NAME)
             RUNTIME DESTINATION ${deploykit_bundle_destination}/bin
         )
 
-        # Device plugins are part of the macOS application bundle. Install
-        # them before deployment so dependency collection and code signing
-        # cover their Mach-O dependencies as well as the main executable.
+        # Device plugins are mutable siblings of the macOS application bundle.
+        # Install them before dependency collection and code signing.
         set(deploykit_macos_analyze_binaries "")
         foreach(plugin_target IN LISTS DEPLOY_MACOS_PLUGIN_TARGETS)
             if(NOT TARGET ${plugin_target})
@@ -324,6 +323,11 @@ macro(deploykit_configure_bundling TARGET_NAME)
             if(plugin_icon STREQUAL "plugin_icon-NOTFOUND")
                 set(plugin_icon "")
             endif()
+            get_target_property(plugin_runtime_payload ${plugin_target}
+                DEPLOYKIT_MACOS_PLUGIN_RUNTIME_PAYLOAD)
+            if(plugin_runtime_payload STREQUAL "plugin_runtime_payload-NOTFOUND")
+                set(plugin_runtime_payload "")
+            endif()
             get_target_property(plugin_runtime_directories ${plugin_target}
                 DEPLOYKIT_MACOS_PLUGIN_RUNTIME_DIRECTORIES)
             if(plugin_runtime_directories STREQUAL "plugin_runtime_directories-NOTFOUND")
@@ -336,18 +340,24 @@ macro(deploykit_configure_bundling TARGET_NAME)
             endif()
             install(TARGETS ${plugin_target}
                 LIBRARY DESTINATION
-                    ${deploykit_bundle_destination}/${TARGET_NAME}.app/Contents/PlugIns/${plugin_destination}
+                    ${deploykit_bundle_destination}/plugins/${plugin_destination}
             )
             if(plugin_manifest)
                 install(FILES "${plugin_manifest}"
                     DESTINATION
-                        ${deploykit_bundle_destination}/${TARGET_NAME}.app/Contents/PlugIns/${plugin_destination}
+                        ${deploykit_bundle_destination}/plugins/${plugin_destination}
                 )
                 install(FILES "${plugin_icon}"
                     DESTINATION
-                        ${deploykit_bundle_destination}/${TARGET_NAME}.app/Contents/PlugIns/${plugin_destination}
+                        ${deploykit_bundle_destination}/plugins/${plugin_destination}
                     RENAME "icon.png"
                 )
+            endif()
+            if(plugin_runtime_payload)
+                install(DIRECTORY "${plugin_runtime_payload}/"
+                    DESTINATION
+                        ${deploykit_bundle_destination}/plugins/${plugin_destination}/runtime
+                    USE_SOURCE_PERMISSIONS)
             endif()
             foreach(plugin_runtime_directory IN LISTS plugin_runtime_directories)
                 string(REPLACE "\\" "/" plugin_runtime_directory
@@ -367,11 +377,11 @@ macro(deploykit_configure_bundling TARGET_NAME)
                         set(bundle_prefix \"\${abs_prefix}/\${deploykit_config_name}\")
                     endif()
                     file(MAKE_DIRECTORY
-                        \"\${bundle_prefix}/${TARGET_NAME}.app/Contents/PlugIns/${plugin_destination}/${plugin_runtime_directory}\")
+                        \"\${bundle_prefix}/plugins/${plugin_destination}/${plugin_runtime_directory}\")
                 ")
             endforeach()
             list(APPEND deploykit_macos_analyze_binaries
-                "\${bundle_prefix}/${TARGET_NAME}.app/Contents/PlugIns/${plugin_destination}/$<TARGET_FILE_NAME:${plugin_target}>"
+                "\${bundle_prefix}/plugins/${plugin_destination}/$<TARGET_FILE_NAME:${plugin_target}>"
             )
         endforeach()
 
@@ -549,6 +559,18 @@ macro(deploykit_configure_bundling TARGET_NAME)
                         endif()
                         
                         get_filename_component(dep_name \"\${dep}\" NAME)
+                        if(dep MATCHES \"\\\\.framework/\")
+                            string(REGEX REPLACE \"^(.*\\\\.framework)/.*$\" \"\\\\1\"
+                                _dk_plugin_runtime_framework \"\${dep}\")
+                            get_filename_component(dep_name
+                                \"\${_dk_plugin_runtime_framework}\" NAME)
+                        endif()
+                        file(GLOB _dk_plugin_owned
+                            \"\${bundle_prefix}/plugins/*/current/runtime/\${dep_name}\")
+                        if(_dk_plugin_owned)
+                            list(APPEND copied_libs \"\${dep_name}\")
+                            continue()
+                        endif()
                         list(FIND copied_libs \"\${dep_name}\" idx)
                         if(idx EQUAL -1)
                             message(STATUS \"[DeployKit] Copying dependency: \${dep}\")
@@ -607,6 +629,13 @@ macro(deploykit_configure_bundling TARGET_NAME)
                         list(FIND copied_libs \"\${dep_name}\" idx)
                         if(idx EQUAL -1)
                             if(EXISTS \"\${bundle_dependency}\")
+                                list(APPEND copied_libs \"\${dep_name}\")
+                                continue()
+                            endif()
+                            file(GLOB _dk_plugin_owned
+                                \"\${bundle_prefix}/plugins/*/current/runtime/\${dep_name}\"
+                                \"\${bundle_prefix}/plugins/*/current/runtime/\${bundle_relative_dependency}\")
+                            if(_dk_plugin_owned)
                                 list(APPEND copied_libs \"\${dep_name}\")
                                 continue()
                             endif()
@@ -725,6 +754,52 @@ macro(deploykit_configure_bundling TARGET_NAME)
                 if(NOT _dk_source_verify_result EQUAL 0)
                     message(FATAL_ERROR \"[DeployKit] Installed app signature integrity verification failed: \${_dk_source_verify_error}\")
                 endif()
+
+                file(GLOB _dk_plugin_frameworks
+                    \"\${bundle_prefix}/plugins/*/current/runtime/*.framework\")
+                foreach(_dk_plugin_framework \${_dk_plugin_frameworks})
+                    execute_process(
+                        COMMAND codesign --force --deep --sign - \"\${_dk_plugin_framework}\"
+                        RESULT_VARIABLE _dk_plugin_sign_result
+                        ERROR_VARIABLE _dk_plugin_sign_error
+                    )
+                    if(NOT _dk_plugin_sign_result EQUAL 0)
+                        message(FATAL_ERROR \"[DeployKit] Plugin framework signing failed: \${_dk_plugin_sign_error}\")
+                    endif()
+                endforeach()
+
+                file(GLOB_RECURSE _dk_plugin_files
+                    \"\${bundle_prefix}/plugins/*/current/*\")
+                foreach(_dk_plugin_file \${_dk_plugin_files})
+                    if(IS_DIRECTORY \"\${_dk_plugin_file}\"
+                       OR _dk_plugin_file MATCHES \"\\\\.framework/\")
+                        continue()
+                    endif()
+                    execute_process(
+                        COMMAND /usr/bin/file \"\${_dk_plugin_file}\"
+                        OUTPUT_VARIABLE _dk_plugin_file_type
+                        ERROR_QUIET
+                    )
+                    if(NOT _dk_plugin_file_type MATCHES \"Mach-O\")
+                        continue()
+                    endif()
+                    execute_process(
+                        COMMAND codesign --force --sign - \"\${_dk_plugin_file}\"
+                        RESULT_VARIABLE _dk_plugin_sign_result
+                        ERROR_VARIABLE _dk_plugin_sign_error
+                    )
+                    if(NOT _dk_plugin_sign_result EQUAL 0)
+                        message(FATAL_ERROR \"[DeployKit] Plugin binary signing failed: \${_dk_plugin_sign_error}\")
+                    endif()
+                    execute_process(
+                        COMMAND codesign --verify --strict \"\${_dk_plugin_file}\"
+                        RESULT_VARIABLE _dk_plugin_verify_result
+                        ERROR_VARIABLE _dk_plugin_verify_error
+                    )
+                    if(NOT _dk_plugin_verify_result EQUAL 0)
+                        message(FATAL_ERROR \"[DeployKit] Plugin binary verification failed: \${_dk_plugin_verify_error}\")
+                    endif()
+                endforeach()
                 message(STATUS \"[DeployKit] Ad-hoc codesign complete.\")
             else()
                 file(REMOVE_RECURSE \"\${_dk_tmp}\")
