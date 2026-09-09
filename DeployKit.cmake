@@ -767,6 +767,12 @@ macro(deploykit_configure_bundling TARGET_NAME)
                         \"\${_dk_plugin_framework}/*\")
                     set(_dk_plugin_framework_signed FALSE)
                     foreach(_dk_plugin_framework_file \${_dk_plugin_framework_files})
+                        # A dereferenced framework has a duplicate payload at
+                        # its root. codesign treats that path as an ambiguous
+                        # app/framework; sign the canonical versioned payload.
+                        if(_dk_plugin_framework_file MATCHES \"\\\\.framework/[^/]+$\")
+                            continue()
+                        endif()
                         execute_process(
                             COMMAND /usr/bin/file \"\${_dk_plugin_framework_file}\"
                             OUTPUT_VARIABLE _dk_plugin_framework_file_type

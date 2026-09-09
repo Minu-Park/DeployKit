@@ -11,3 +11,4 @@
 - Keep strict verification on the clean temporary signing copy and use non-strict signature integrity verification on the FileProvider source copy; distribution DMGs remain strict-verified.
 - Allow consumers to make the explicit bundle target the sole install path, avoiding duplicate deployment after a fresh target link.
 - Create consumer-declared macOS plugin runtime directories before dependency collection and final signing.
+- Skip dereferenced macOS framework root payloads that `codesign` rejects as ambiguous while signing their canonical versioned Mach-O payloads.
