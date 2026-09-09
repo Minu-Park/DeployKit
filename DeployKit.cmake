@@ -758,13 +758,46 @@ macro(deploykit_configure_bundling TARGET_NAME)
                 file(GLOB _dk_plugin_frameworks
                     \"\${bundle_prefix}/plugins/*/current/runtime/*.framework\")
                 foreach(_dk_plugin_framework \${_dk_plugin_frameworks})
-                    execute_process(
-                        COMMAND codesign --force --deep --sign - \"\${_dk_plugin_framework}\"
-                        RESULT_VARIABLE _dk_plugin_sign_result
-                        ERROR_VARIABLE _dk_plugin_sign_error
-                    )
-                    if(NOT _dk_plugin_sign_result EQUAL 0)
-                        message(FATAL_ERROR \"[DeployKit] Plugin framework signing failed: \${_dk_plugin_sign_error}\")
+                    # Sign the framework's Mach-O payloads inside-out. The
+                    # package archive intentionally contains no symlinks, so
+                    # signing the flattened framework directory itself can be
+                    # rejected by codesign as an ambiguous app/framework.
+                    file(GLOB_RECURSE _dk_plugin_framework_files
+                        LIST_DIRECTORIES false
+                        \"\${_dk_plugin_framework}/*\")
+                    set(_dk_plugin_framework_signed FALSE)
+                    foreach(_dk_plugin_framework_file \${_dk_plugin_framework_files})
+                        execute_process(
+                            COMMAND /usr/bin/file \"\${_dk_plugin_framework_file}\"
+                            OUTPUT_VARIABLE _dk_plugin_framework_file_type
+                            ERROR_QUIET
+                        )
+                        if(NOT _dk_plugin_framework_file_type MATCHES \"Mach-O\")
+                            continue()
+                        endif()
+                        execute_process(
+                            COMMAND codesign --force --sign - \"\${_dk_plugin_framework_file}\"
+                            RESULT_VARIABLE _dk_plugin_sign_result
+                            ERROR_VARIABLE _dk_plugin_sign_error
+                        )
+                        if(NOT _dk_plugin_sign_result EQUAL 0)
+                            message(FATAL_ERROR
+                                \"[DeployKit] Plugin framework binary signing failed: \${_dk_plugin_framework_file}: \${_dk_plugin_sign_error}\")
+                        endif()
+                        execute_process(
+                            COMMAND codesign --verify --strict \"\${_dk_plugin_framework_file}\"
+                            RESULT_VARIABLE _dk_plugin_verify_result
+                            ERROR_VARIABLE _dk_plugin_verify_error
+                        )
+                        if(NOT _dk_plugin_verify_result EQUAL 0)
+                            message(FATAL_ERROR
+                                \"[DeployKit] Plugin framework binary verification failed: \${_dk_plugin_framework_file}: \${_dk_plugin_verify_error}\")
+                        endif()
+                        set(_dk_plugin_framework_signed TRUE)
+                    endforeach()
+                    if(NOT _dk_plugin_framework_signed)
+                        message(FATAL_ERROR
+                            \"[DeployKit] Plugin framework contains no signable Mach-O payload: \${_dk_plugin_framework}\")
                     endif()
                 endforeach()
 
