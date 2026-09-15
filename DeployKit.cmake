@@ -328,6 +328,16 @@ macro(deploykit_configure_bundling TARGET_NAME)
             if(plugin_runtime_payload STREQUAL "plugin_runtime_payload-NOTFOUND")
                 set(plugin_runtime_payload "")
             endif()
+            get_target_property(plugin_package_payload ${plugin_target}
+                DEPLOYKIT_MACOS_PLUGIN_PACKAGE_PAYLOAD)
+            if(plugin_package_payload STREQUAL "plugin_package_payload-NOTFOUND")
+                set(plugin_package_payload "")
+            endif()
+            get_target_property(plugin_auxiliary_targets ${plugin_target}
+                PLAYGROUND_PLUGIN_AUXILIARY_TARGETS)
+            if(plugin_auxiliary_targets STREQUAL "plugin_auxiliary_targets-NOTFOUND")
+                set(plugin_auxiliary_targets "")
+            endif()
             get_target_property(plugin_runtime_directories ${plugin_target}
                 DEPLOYKIT_MACOS_PLUGIN_RUNTIME_DIRECTORIES)
             if(plugin_runtime_directories STREQUAL "plugin_runtime_directories-NOTFOUND")
@@ -342,6 +352,13 @@ macro(deploykit_configure_bundling TARGET_NAME)
                 LIBRARY DESTINATION
                     ${deploykit_bundle_destination}/plugins/${plugin_destination}
             )
+            foreach(plugin_auxiliary_target IN LISTS plugin_auxiliary_targets)
+                install(TARGETS ${plugin_auxiliary_target}
+                    RUNTIME DESTINATION
+                        ${deploykit_bundle_destination}/plugins/${plugin_destination})
+                list(APPEND deploykit_macos_analyze_binaries
+                    "\${bundle_prefix}/plugins/${plugin_destination}/$<TARGET_FILE_NAME:${plugin_auxiliary_target}>")
+            endforeach()
             if(plugin_manifest)
                 install(FILES "${plugin_manifest}"
                     DESTINATION
@@ -354,10 +371,69 @@ macro(deploykit_configure_bundling TARGET_NAME)
                 )
             endif()
             if(plugin_runtime_payload)
+                install(CODE "
+                    get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
+                    set(deploykit_config_name \"\${CMAKE_INSTALL_CONFIG_NAME}\")
+                    if(deploykit_config_name STREQUAL \"\")
+                        set(bundle_prefix \"\${abs_prefix}\")
+                    else()
+                        set(bundle_prefix \"\${abs_prefix}/\${deploykit_config_name}\")
+                    endif()
+                    file(REMOVE_RECURSE
+                        \"\${bundle_prefix}/plugins/${plugin_destination}/runtime\")
+                ")
                 install(DIRECTORY "${plugin_runtime_payload}/"
                     DESTINATION
                         ${deploykit_bundle_destination}/plugins/${plugin_destination}/runtime
                     USE_SOURCE_PERMISSIONS)
+            endif()
+            if(plugin_package_payload)
+                install(CODE "
+                    get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
+                    set(deploykit_config_name \"\${CMAKE_INSTALL_CONFIG_NAME}\")
+                    if(deploykit_config_name STREQUAL \"\")
+                        set(bundle_prefix \"\${abs_prefix}\")
+                    else()
+                        set(bundle_prefix \"\${abs_prefix}/\${deploykit_config_name}\")
+                    endif()
+                    set(payload_root \"${plugin_package_payload}\")
+                    file(GLOB payload_entries LIST_DIRECTORIES true \"\${payload_root}/*\")
+                    file(GLOB payload_hidden LIST_DIRECTORIES false \"\${payload_root}/.[!.]*\")
+                    foreach(payload_entry IN LISTS payload_entries payload_hidden)
+                        get_filename_component(payload_name \"\${payload_entry}\" NAME)
+                        if(payload_name MATCHES \"^(.+) ([0-9]+)(\\\\.[^.]+)?$\" AND
+                           EXISTS \"\${payload_root}/\${CMAKE_MATCH_1}\${CMAKE_MATCH_3}\")
+                            continue()
+                        endif()
+                        file(REMOVE_RECURSE
+                            \"\${bundle_prefix}/plugins/${plugin_destination}/\${payload_name}\")
+                    endforeach()
+                ")
+                install(DIRECTORY "${plugin_package_payload}/"
+                    DESTINATION
+                        ${deploykit_bundle_destination}/plugins/${plugin_destination}
+                    USE_SOURCE_PERMISSIONS)
+            endif()
+            if(plugin_runtime_payload OR plugin_package_payload)
+                install(CODE "
+                    get_filename_component(abs_prefix \"\${CMAKE_INSTALL_PREFIX}\" ABSOLUTE)
+                    set(deploykit_config_name \"\${CMAKE_INSTALL_CONFIG_NAME}\")
+                    if(deploykit_config_name STREQUAL \"\")
+                        set(bundle_prefix \"\${abs_prefix}\")
+                    else()
+                        set(bundle_prefix \"\${abs_prefix}/\${deploykit_config_name}\")
+                    endif()
+                    file(GLOB_RECURSE payload_files LIST_DIRECTORIES false
+                        \"\${bundle_prefix}/plugins/${plugin_destination}/*\")
+                    foreach(payload_file IN LISTS payload_files)
+                        get_filename_component(payload_name \"\${payload_file}\" NAME)
+                        get_filename_component(payload_dir \"\${payload_file}\" DIRECTORY)
+                        if(payload_name MATCHES \"^(.+) ([0-9]+)(\\\\.[^.]+)?$\" AND
+                           EXISTS \"\${payload_dir}/\${CMAKE_MATCH_1}\${CMAKE_MATCH_3}\")
+                            file(REMOVE \"\${payload_file}\")
+                        endif()
+                    endforeach()
+                ")
             endif()
             foreach(plugin_runtime_directory IN LISTS plugin_runtime_directories)
                 string(REPLACE "\\" "/" plugin_runtime_directory
