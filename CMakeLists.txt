@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(DeployKit LANGUAGES NONE)
+project(DeployKit VERSION 0.1.0 LANGUAGES NONE)
 
 # Allow parent projects to include DeployKit by module name after add_subdirectory().
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}")

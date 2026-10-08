@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.0 (2026-10-08)
+
 - Replace plugin runtime and package payload trees on restage instead of merging leftover files.
 - Install and analyze plugin-owned worker executables beside their plugin library.
 - Correct the README to distinguish reusable bundle staging from the legacy product-specific Windows IFW generator.
