@@ -553,8 +553,10 @@ macro(deploykit_configure_bundling TARGET_NAME)
             endif()
         endforeach()
 
-        foreach(binary ${DEPLOY_ANALYZE_BINARIES})
-            list(APPEND deploykit_macos_analyze_binaries "${binary}")
+        # ANALYZE_BINARIES are relative to the bundle root. Prefix them here so
+        # the install-time ${bundle_prefix} reference is not parsed as a macro argument.
+        foreach(binary IN LISTS DEPLOY_ANALYZE_BINARIES)
+            list(APPEND deploykit_macos_analyze_binaries "\${bundle_prefix}/${binary}")
         endforeach()
 
         # Execute macdeployqt as a post-install step
@@ -1590,8 +1592,10 @@ ${deploykit_runtime_signature_path_lines})
             endif()
         endforeach()
 
-        foreach(binary ${DEPLOY_ANALYZE_BINARIES})
-            list(APPEND deploykit_linux_analyze_binaries "${binary}")
+        # ANALYZE_BINARIES are relative to the bundle root. Prefix them here so
+        # the install-time ${bundle_prefix} reference is not parsed as a macro argument.
+        foreach(binary IN LISTS DEPLOY_ANALYZE_BINARIES)
+            list(APPEND deploykit_linux_analyze_binaries "\${bundle_prefix}/${binary}")
         endforeach()
 
         # Set RPATH for the executable to find libraries in lib/
