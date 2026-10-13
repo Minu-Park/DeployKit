@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.1.1 (2026-10-13)
+
+- Preserve bundle-relative caller paths until install-time expansion during macOS and Linux dependency collection.
+
 ## v0.1.0 (2026-10-08)
 
 - Replace plugin runtime and package payload trees on restage instead of merging leftover files.
