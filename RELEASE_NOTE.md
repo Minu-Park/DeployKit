@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Use the shared icon/ toggle artwork for IFW installer checkbox states.
+
 ## v0.1.1 (2026-10-13)
 
 - Preserve bundle-relative caller paths until install-time expansion during macOS and Linux dependency collection.

@@ -78,16 +78,16 @@ QCheckBox, QRadioButton {
 }
 
 QCheckBox::indicator {
-    width: 16px;
-    height: 16px;
+    width: 36px;
+    height: 20px;
 }
 
 QCheckBox::indicator:unchecked {
-    image: url(:/Resources/Icons/icons8-unchecked-checkbox-48.png);
+    image: url(:/Resources/icon/toggle-off-48.png);
 }
 
 QCheckBox::indicator:checked {
-    image: url(:/Resources/Icons/icons8-checked-checkbox-48.png);
+    image: url(:/Resources/icon/toggle-on-48.png);
 }
 QTreeView, QListView, QTableView, QTreeWidget, QListWidget {
     background-color: #ffffff;
